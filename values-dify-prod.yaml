@@ -1,0 +1,512 @@
+# ==============================================================================
+# Dify 生产环境优化配置
+# 基于 values-dify.yaml，针对高 RPS 和高可用场景优化
+# 
+# 集群配置（3节点HA集群）: 
+#   - Node 1: 32C/120G (high-performance) - 高性能节点，API/Worker 优先调度
+#   - Node 2: 16C/32G (standard) - 标准节点，均衡调度
+#   - Node 3: 16C/32G (standard) - 标准节点，均衡调度
+# 
+# 目标: 高并发 (400+ RPS) + 高可用 (3节点HA) + 资源留有余量避免 OOM
+# ==============================================================================
+
+# 继承基础配置，仅覆盖需要优化的部分
+# 使用方式: helm upgrade dify charts/dify -f values-dify.yaml -f values-dify-prod.yaml -n dify
+
+###################################
+# API 服务优化（最关键）
+###################################
+api:
+  enabled: true
+  # 初始副本数：8 个（增加API处理能力，主要处理工作流/对话流）
+  replicas: 8
+  
+  # 资源配置：提高单Pod资源，减少超时错误
+  resources:
+    requests:
+      cpu: "2000m"      # 提高到 2 核（确保充足处理能力）
+      memory: "4Gi"     # 提高到 4G（避免内存压力）
+    limits:
+      cpu: "6000m"      # 最多 6 核
+      memory: "6Gi"     # 最多 6G（给予充足上限）
+  
+  # 启用水平自动伸缩（HPA）- 针对对话流优化
+  autoscaling:
+    enabled: true
+    minReplicas: 8             # 提高最小副本数（优先保证API能力）
+    maxReplicas: 12            # 最多 12 个（充分利用集群资源）
+    targetCPUUtilizationPercentage: 60    # 60% 扩容（更早响应负载）
+    targetMemoryUtilizationPercentage: 65 # 65% 扩容（避免内存瓶颈）
+  
+  # 优化健康检查 - 更宽容的配置，减少状态错误
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 45     # 增加初始延迟，等待应用完全启动
+    periodSeconds: 30           # 降低检查频率，减少开销
+    timeoutSeconds: 20          # 增加超时时间，避免瞬时高负载误判
+    failureThreshold: 12        # 更宽容，12 次失败才重启（减少误杀）
+    successThreshold: 1
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 20     # 增加初始延迟，确保应用准备好
+    periodSeconds: 10
+    timeoutSeconds: 20          # 增加超时时间
+    failureThreshold: 8         # 更宽容，8 次失败才标记不健康（减少状态错误）
+    successThreshold: 1         # 1 次成功即可接入流量（加快恢复）
+  
+  # 滚动更新策略 - 增加 surge 以快速响应流量增长
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 3               # 一次最多增加 3 个 Pod（原 1）
+      maxUnavailable: 0         # 确保零停机
+  
+  # Pod 拓扑分散约束：均匀分布，但允许高性能节点承担更多负载
+  topologySpreadConstraints:
+    - maxSkew: 2                  # 允许最多 2 个 Pod 的差异（高性能节点可多 2 个）
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway  # HA 集群，保证可用性优先
+      labelSelector:
+        matchLabels:
+          component: api
+  
+  # 亲和性配置：优先利用高性能节点，均衡使用标准节点
+  affinity:
+    # Pod 反亲和性：适度分散，允许高密度部署
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 20              # 低权重，允许同节点多 Pod（HA 集群更灵活）
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                    - api
+            topologyKey: kubernetes.io/hostname
+    
+    # 节点调度策略：高性能节点优先，标准节点均衡
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        # 最高优先级：高性能节点（32C/120G）
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                  - high-performance
+        # 次优先级：标准节点（16C/32G）
+        - weight: 50
+          preference:
+            matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                  - standard
+  
+  # 保持现有环境变量配置
+  logLevel: INFO  # 生产环境建议 INFO，减少日志开销（DEBUG 会影响性能）
+  
+  extraEnv:
+    - name: CHECK_UPDATE_URL
+      value: ""
+    - name: CODE_MAX_NUMBER
+      value: "9223372036854775807"
+    - name: CODE_MIN_NUMBER
+      value: "-9223372036854775808"
+    - name: CODE_MAX_STRING_LENGTH
+      value: "80000"
+    - name: TEMPLATE_TRANSFORM_MAX_LENGTH
+      value: "80000"
+    - name: CODE_MAX_STRING_ARRAY_LENGTH
+      value: "30"
+    - name: CODE_MAX_OBJECT_ARRAY_LENGTH
+      value: "30"
+    - name: CODE_MAX_NUMBER_ARRAY_LENGTH
+      value: "1000"
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
+    # 优化 Gunicorn 配置（提高并发能力，减少超时）
+    - name: SERVER_WORKER_AMOUNT
+      value: "8"                # 每个 Pod 8 个 worker（8 Pod x 8 worker = 64 并发）
+    - name: SERVER_WORKER_CLASS
+      value: "gevent"           # 使用 gevent 异步 worker 提升并发能力
+    - name: SERVER_WORKER_CONNECTIONS
+      value: "2000"             # 每个 worker 最多 2000 个异步连接
+    - name: GUNICORN_TIMEOUT
+      value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
+    # 数据库连接池优化（8-12 Pod 配置，减少超时）
+    - name: SQLALCHEMY_POOL_SIZE
+      value: "30"               # 每个 Pod 30 个连接（8-12 Pod = 240-360 连接）
+    - name: SQLALCHEMY_MAX_OVERFLOW
+      value: "40"               # 额外 40 个溢出连接（高峰时总共 12x70=840 连接，安全）
+    - name: SQLALCHEMY_POOL_RECYCLE
+      value: "1800"             # 30 分钟回收连接（避免长连接失效）
+    - name: SQLALCHEMY_POOL_PRE_PING
+      value: "true"             # 连接前检查有效性（防止断连错误）
+    - name: SQLALCHEMY_POOL_TIMEOUT
+      value: "30"               # 连接池获取超时 30 秒
+    - name: SQLALCHEMY_ECHO
+      value: "false"            # 关闭 SQL 日志提升性能
+    # Redis 连接池优化（增加连接池避免超时）
+    - name: REDIS_POOL_SIZE
+      value: "40"               # 每个 Pod 40 个连接（8-12 Pod = 320-480 连接）
+    - name: REDIS_POOL_MAX_CONNECTIONS
+      value: "60"               # 最大 60 个连接（峰值时使用）
+    - name: CELERY_BROKER_POOL_LIMIT
+      value: "40"               # Celery broker 连接池（匹配 REDIS_POOL_SIZE）
+    # 性能优化配置
+    - name: HTTP_REQUEST_MAX_CONNECT_TIMEOUT
+      value: "30"               # HTTP 请求连接超时
+    - name: HTTP_REQUEST_MAX_READ_TIMEOUT
+      value: "60"               # HTTP 请求读取超时
+    - name: HTTP_REQUEST_MAX_WRITE_TIMEOUT
+      value: "30"               # HTTP 请求写入超时
+    - name: RETRY_TIMES
+      value: "3"                # 重试次数
+    - name: WEB_API_CORS_ALLOW_ORIGINS
+      value: "*"                # CORS 配置（如需更严格请调整）
+    # 禁用不必要的功能提升性能
+    - name: SENTRY_DSN
+      value: ""                 # 关闭 Sentry（减少性能开销）
+
+###################################
+# Worker 服务优化（异步任务处理 - 主要处理知识库索引）
+###################################
+worker:
+  enabled: true
+  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  
+  resources:
+    requests:
+      cpu: "1000m"              # 请求 1 核
+      memory: "2Gi"             # 请求 2G
+    limits:
+      cpu: "4000m"              # 最多 4 核（处理密集知识库任务时使用）
+      memory: "4Gi"             # 最多 4G
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3              # 最少 3 个（3节点HA，每节点1个）
+    maxReplicas: 8              # 最多 8 个（大量知识库索引时扩容）
+    targetCPUUtilizationPercentage: 75    # 75% 扩容（避免过早扩容浪费资源）
+    targetMemoryUtilizationPercentage: 80 # 80% 扩容
+  
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  # 拓扑分散约束：均匀分布
+  topologySpreadConstraints:
+    - maxSkew: 1                  # Worker 保持均匀分布（任务处理需要负载均衡）
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          component: worker
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 40              # 适度分散
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                    - worker
+            topologyKey: kubernetes.io/hostname
+    
+    # 节点调度策略：优先高性能节点（处理异步任务更快）
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 80              # 高性能节点
+          preference:
+            matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                  - high-performance
+        - weight: 50              # 标准节点
+          preference:
+            matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                  - standard
+  
+  logLevel: INFO
+  
+  extraEnv:
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
+    # Celery Worker 优化（使用正确的 Dify 环境变量名）
+    - name: CELERY_AUTO_SCALE
+      value: "true"             # 启用自动伸缩
+    - name: CELERY_MAX_WORKERS
+      value: "8"                # 最多 8 个并发 worker
+    - name: CELERY_MIN_WORKERS
+      value: "2"                # 最少 2 个并发 worker
+    - name: CELERY_WORKER_CLASS
+      value: "gevent"           # 使用 gevent worker
+    - name: MAX_TASK_PRE_CHILD
+      value: "100"              # 每个 worker 处理 100 个任务后重启（防止内存泄漏）
+
+###################################
+# Beat 服务（定时任务调度器）
+###################################
+beat:
+  enabled: true
+  # Beat 只需要 1 个副本（多个会重复执行定时任务）
+  
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  
+  updateStrategy:
+    type: Recreate             # Beat 使用 Recreate 策略（避免多实例）
+  
+  logLevel: INFO
+  
+  extraEnv:
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
+
+###################################
+# Web 前端服务优化
+###################################
+web:
+  enabled: true
+  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3              # 最少 3 个（3节点HA，每节点1个）
+    maxReplicas: 6              # 最多 6 个（扩容时每节点2个）
+    targetCPUUtilizationPercentage: 70
+  
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                    - web
+            topologyKey: kubernetes.io/hostname
+
+###################################
+# Sandbox 服务优化（代码执行）
+###################################
+sandbox:
+  enabled: true
+  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3              # 最少 3 个（3节点HA，每节点1个）
+    maxReplicas: 6              # 最多 6 个（扩容时每节点2个）
+    targetCPUUtilizationPercentage: 70
+  
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                    - sandbox
+            topologyKey: kubernetes.io/hostname
+  
+  extraEnv:
+    - name: WORKER_TIMEOUT
+      value: "15"
+    - name: PIP_MIRROR_URL
+      value: "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+###################################
+# Proxy 服务优化
+###################################
+proxy:
+  enabled: true
+  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+  
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                    - proxy
+            topologyKey: kubernetes.io/hostname
+  
+  # Nginx 优化配置
+  clientMaxBodySize: "100m"     # 增加上传大小限制
+
+###################################
+# SSRF Proxy 服务
+###################################
+ssrfProxy:
+  enabled: true
+  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+###################################
+# Plugin Daemon 服务
+###################################
+pluginDaemon:
+  enabled: true
+  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                    - plugin-daemon
+            topologyKey: kubernetes.io/hostname
+  
+  extraEnv:
+    - name: PIP_MIRROR_URL
+      value: "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+###################################
+# Service 配置
+# 注意：Ingress 配置继承自 values-dify.yaml，不在此覆盖
+###################################
+service:
+  type: ClusterIP
+  port: 80
+
+###################################
+# 全局资源配置
+###################################
+# 注意：这里的 resources 是示例，实际每个组件已经单独配置
+resources: {}
+
+###################################
+# 全局节点选择器（如有特殊需求）
+###################################
+nodeSelector: {}
+
+###################################
+# 全局容忍度
+###################################
+tolerations: []
+
+###################################
+# 全局亲和性
+###################################
+affinity: {}
+
+# ==============================================================================
+# 说明：
+# 1. API 服务是瓶颈，配置了 8 个基础副本，HPA 8-12 副本自动伸缩
+# 2. Worker 配置了 3 个基础副本，HPA 3-8 副本（闲时节省资源给API）
+# 3. 其他服务（Web/Sandbox/Proxy等）各 3 个副本（3节点HA，每节点1个）
+# 4. 使用 Pod 反亲和性将副本分散到不同节点，保证高可用
+# 5. API/Worker 优先调度到高性能节点（32C/120G），其他服务均衡分布
+# 6. 生产环境建议监控指标：
+#    - API Pod CPU/Memory 使用率（目标 <70%）
+#    - HPA 伸缩事件（观察扩缩容频率）
+#    - P99 响应时间（目标 <1s）
+#    - 错误率（目标 <0.5%）
+#    - PostgreSQL 连接数（目标 <1000）
+# 
+# 使用方式：
+# helm upgrade dify charts/dify -f values-dify.yaml -f values-dify-prod.yaml -n dify
+# ==============================================================================
+
