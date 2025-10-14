@@ -110,6 +110,8 @@ api:
   logLevel: INFO  # 生产环境建议 INFO，减少日志开销（DEBUG 会影响性能）
   
   extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
     - name: CHECK_UPDATE_URL
       value: ""
     - name: CODE_MAX_NUMBER
@@ -137,17 +139,18 @@ api:
       value: "2000"             # 每个 worker 最多 2000 个异步连接
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池优化（8-12 Pod 配置，减少超时）
+    # 数据库连接池优化（严格控制总连接数 < 1400，避免 RDS 耗尽）
+    # 计算：8-12 Pod，每 Pod 15+10=25 峰值 = 200-300 连接（API）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "30"               # 每个 Pod 30 个连接（8-12 Pod = 240-360 连接）
+      value: "15"               # 每个 Pod 15 个连接
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "40"               # 额外 40 个溢出连接（高峰时总共 12x70=840 连接，安全）
+      value: "10"               # 溢出 10（峰值 25/Pod）
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "1800"             # 30 分钟回收连接（避免长连接失效）
+      value: "600"              # 10 分钟回收连接（快速清理 idle_in_transaction）
     - name: SQLALCHEMY_POOL_PRE_PING
-      value: "true"             # 连接前检查有效性（防止断连错误）
+      value: "true"             # 连接前检查有效性
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "30"               # 连接池获取超时 30 秒
+      value: "20"               # 获取连接等待超时 20 秒
     - name: SQLALCHEMY_ECHO
       value: "false"            # 关闭 SQL 日志提升性能
     # Redis 连接池优化（增加连接池避免超时）
@@ -243,8 +246,21 @@ worker:
   logLevel: INFO
   
   extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
+    # Worker 数据库连接池（2-8 Pod，每 Pod 8+4=12 峰值 = 24-96 连接）
+    - name: SQLALCHEMY_POOL_SIZE
+      value: "8"
+    - name: SQLALCHEMY_MAX_OVERFLOW
+      value: "4"
+    - name: SQLALCHEMY_POOL_RECYCLE
+      value: "600"
+    - name: SQLALCHEMY_POOL_PRE_PING
+      value: "true"
+    - name: SQLALCHEMY_POOL_TIMEOUT
+      value: "15"
     # Celery Worker 优化（使用正确的 Dify 环境变量名）
     - name: CELERY_AUTO_SCALE
       value: "true"             # 启用自动伸缩
@@ -278,8 +294,21 @@ beat:
   logLevel: INFO
   
   extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
+    # Beat 数据库连接池（1 Pod，3+2=5 峰值）
+    - name: SQLALCHEMY_POOL_SIZE
+      value: "3"
+    - name: SQLALCHEMY_MAX_OVERFLOW
+      value: "2"
+    - name: SQLALCHEMY_POOL_RECYCLE
+      value: "600"
+    - name: SQLALCHEMY_POOL_PRE_PING
+      value: "true"
+    - name: SQLALCHEMY_POOL_TIMEOUT
+      value: "10"
 
 ###################################
 # Web 前端服务优化
@@ -307,6 +336,12 @@ web:
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+
+  extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
   
   affinity:
     podAntiAffinity:
@@ -362,6 +397,8 @@ sandbox:
             topologyKey: kubernetes.io/hostname
   
   extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
     - name: WORKER_TIMEOUT
       value: "15"
     - name: PIP_MIRROR_URL
@@ -404,6 +441,12 @@ proxy:
   # Nginx 优化配置
   clientMaxBodySize: "100m"     # 增加上传大小限制
 
+  extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
+
 ###################################
 # SSRF Proxy 服务
 ###################################
@@ -424,6 +467,12 @@ ssrfProxy:
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+
+  extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
 
 ###################################
 # Plugin Daemon 服务
@@ -460,8 +509,23 @@ pluginDaemon:
             topologyKey: kubernetes.io/hostname
   
   extraEnv:
+    - name: TZ
+      value: "Asia/Shanghai"
+    - name: LOG_TZ
+      value: "Asia/Shanghai"
     - name: PIP_MIRROR_URL
       value: "https://pypi.tuna.tsinghua.edu.cn/simple"
+    # PluginDaemon 数据库连接池（3 Pod，每 Pod 5+3=8 峰值 = 24 连接）
+    - name: SQLALCHEMY_POOL_SIZE
+      value: "5"
+    - name: SQLALCHEMY_MAX_OVERFLOW
+      value: "3"
+    - name: SQLALCHEMY_POOL_RECYCLE
+      value: "600"
+    - name: SQLALCHEMY_POOL_PRE_PING
+      value: "true"
+    - name: SQLALCHEMY_POOL_TIMEOUT
+      value: "10"
 
 ###################################
 # Service 配置

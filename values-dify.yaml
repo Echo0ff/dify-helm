@@ -2,6 +2,78 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+###################################
+# 连接配置集中管理
+# 注意：敏感信息已移至 values-secrets.yaml
+# 使用方式：helm install -f values-dify.yaml -f values-secrets.yaml
+###################################
+connectionConfig:
+  # PostgreSQL 数据库配置
+  postgres:
+    enabled: true
+    host: "your-postgres-host"  # 在 values-secrets.yaml 中覆盖
+    port: 5432
+    username: "postgres"
+    password: "PLEASE_SET_IN_values-secrets.yaml"
+    database:
+      api: "dify"
+      pluginDaemon: "dify_plugin"
+
+  # Redis 配置
+  redis:
+    enabled: true
+    host: "your-redis-host"  # 在 values-secrets.yaml 中覆盖
+    port: 6379
+    username: ""
+    password: "PLEASE_SET_IN_values-secrets.yaml"
+    useSSL: false
+
+  # 阿里云 OSS 配置
+  oss:
+    enabled: true
+    endpoint: "https://oss-cn-hangzhou.aliyuncs.com"  # 在 values-secrets.yaml 中覆盖
+    accessKey: "PLEASE_SET_IN_values-secrets.yaml"
+    secretKey: "PLEASE_SET_IN_values-secrets.yaml"
+    region: "cn-hangzhou"
+    bucketName:
+      api: "your-bucket-name"  # 在 values-secrets.yaml 中覆盖
+      pluginDaemon: "your-bucket-name"
+    authVersion: "v4"
+    path: ""
+
+  # Milvus 向量数据库配置
+  milvus:
+    enabled: true
+    uri: "http://your-milvus-host:19530"  # 在 values-secrets.yaml 中覆盖
+    database: "default"
+    token: ""
+    user: "root"
+    password: "PLEASE_SET_IN_values-secrets.yaml"
+
+  # 应用配置
+  app:
+    secretKey: "PLEASE_SET_IN_values-secrets.yaml"
+    consoleSecretKey: "PLEASE_SET_IN_values-secrets.yaml"
+
+  # 邮件配置
+  mail:
+    type: "smtp"
+    defaultSendFrom: "noreply@yourdomain.com"
+    smtpServer: "smtp.yourdomain.com"
+    smtpPort: 587
+    smtpUsername: "your_email@yourdomain.com"
+    smtpPassword: "PLEASE_SET_IN_values-secrets.yaml"
+    smtpUseTLS: true
+
+  # 存储配置
+  storage:
+    type: "oss"
+    localPath: "storage"
+
+  # 日志配置
+  logging:
+    level: "INFO"
+
 image:
   api:
     repository: langgenius/dify-api
@@ -220,7 +292,7 @@ api:
     type: "resend"
     resend:
       # Resend API Key
-      apiKey: "xxxx"
+      apiKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
       # Resend API URL
       apiUrl: https://api.resend.com
     # SMTP Configuration
@@ -235,7 +307,7 @@ api:
   # When enabled, migrations will be executed prior to application startup and the application will start after the migrations have completed.
   migration: true
   # A secret key that is used for securely signing the session cookie and encrypting sensitive information on the database. You can generate a strong key using `openssl rand -base64 42`.
-  secretKey: "sk-9f73s3ljTXVcMT3Blb3ljTqtsKiGHXVcMT3BlbkFJLK7U"
+  secretKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
   ## Storage for `api` and `worker`
   ## Ignored if `.Values.externalS3.enabled` is true
   ##
@@ -736,9 +808,9 @@ pluginDaemon:
     labels: {}
     clusterIP: ""
   auth:
-    serverKey: "lYkiYYT6owG+71oLerGzA7GXCgOT++6ovaezWAjpCjf+Sjc3ZtU+qUEi"
+    serverKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置，使用 openssl rand -base64 42 生成
     # A separate key for interactions between `api`(`worker`) and `pluginDaemon`
-    difyApiKey: "QaHbTe77CtuXmsfyhR7+vRjI/+XbV1AaFy691iy+kGDv2Jvy0/eAh8Y1"
+    difyApiKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置，使用 openssl rand -base64 42 生成
   ## Storage for `pluginDaemon`
   ## 如果通过 `.Values.externalS3` 配置了外部对象存储，则此持久化设置将被忽略（建议在 externalS3.bucketName.pluginDaemon 指定独立桶）。
   ##
@@ -789,7 +861,7 @@ postgresql:
     storageClass: ""
     postgresql:
       auth:
-        postgresPassword: "difyai123456"
+        postgresPassword: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
         username: ""
         password: ""
         database: "dify"
@@ -1256,6 +1328,11 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-body-size: 15m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # 修复 Next.js Server Actions 的 headers 问题
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-Host $host;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Forwarded-Port $server_port;
     # kubernetes.io/tls-acme: "true"
     # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   hosts:
@@ -1431,7 +1508,7 @@ redis:
     ## @param auth.password Redis&reg; password
     ## Defaults to a random 10-character alphanumeric string if not set
     ##
-    password: "difyai123456"
+    password: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
     ## @param auth.existingSecret The name of an existing secret with Redis&reg; credentials
     ## NOTE: When it's set, the previous `auth.password` parameter is ignored
     ##
@@ -3093,14 +3170,15 @@ redis:
 # - these configs are only used when `externalPostgres.enabled` is true
 ###################################
 externalPostgres:
-  enabled: true  # 启用外部 PostgreSQL（docker-compose 暴露在宿主机 5432）
-  username: "postgres"  # 对应 docker-compose POSTGRES_USER
-  address: pgm-bp1a88hs9i7k322d.pg.rds.aliyuncs.com  # OrbStack K8s 访问宿主机 Docker 服务
-  port: 5432
+  enabled: true  # 启用外部 PostgreSQL
+  # 以下值从 connectionConfig.postgres 继承（在 values-secrets.yaml 中设置）
+  username: ""  # 将由 connectionConfig.postgres.username 填充
+  address: ""   # 将由 connectionConfig.postgres.host 填充
+  port: 5432    # 将由 connectionConfig.postgres.port 填充
   database:
-    api: "dify"  # API/Worker 使用的数据库名
-    pluginDaemon: "dify_plugin"  # 插件守护进程数据库（需要预先创建）
-  password: "@7QMdnPhvJ6d^h"  # 直接填写明文密码（测试环境）
+    api: ""     # 将由 connectionConfig.postgres.database.api 填充
+    pluginDaemon: ""  # 将由 connectionConfig.postgres.database.pluginDaemon 填充
+  password: ""  # 将由 connectionConfig.postgres.password 填充
   # existingSecret: "dify-postgres-secret"
 
 ###################################
@@ -3127,16 +3205,16 @@ externalAzureBlobStorage:
 ###################################
 externalOSS:
   enabled: true  # 启用阿里云 OSS
-  endpoint: "https://oss-cn-hangzhou-internal.aliyuncs.com"  # OSS endpoint（不包含 bucket 名称）
-  accessKey: ""
-  secretKey: ""
-  region: "cn-hangzhou"
+  # 以下值从 connectionConfig.oss 继承（在 values-secrets.yaml 中设置）
+  endpoint: ""      # 将由 connectionConfig.oss.endpoint 填充
+  accessKey: ""     # 将由 connectionConfig.oss.accessKey 填充
+  secretKey: ""     # 将由 connectionConfig.oss.secretKey 填充
+  region: ""        # 将由 connectionConfig.oss.region 填充
   bucketName:
-    api: "dmdify-oss"  # api/worker 使用的 bucket（实际存在的 bucket）
-    # plugin-daemon 使用同一个 bucket，会在其中创建 plugin_daemon/ 路径
-    pluginDaemon: "dmdify-oss"  # 使用同一个 bucket
-  authVersion: v4
-  path: ""  # api/worker 在 bucket 中的路径前缀（空表示 bucket 根目录）
+    api: ""         # 将由 connectionConfig.oss.bucketName.api 填充
+    pluginDaemon: "" # 将由 connectionConfig.oss.bucketName.pluginDaemon 填充
+  authVersion: ""   # 将由 connectionConfig.oss.authVersion 填充
+  path: ""          # 将由 connectionConfig.oss.path 填充
 
 ###################################
 # External Google Cloud Storage
@@ -3201,12 +3279,13 @@ externalTOS:
 ###################################
 externalRedis:
   enabled: true
-  host: "192.168.44.225"
-  port: 6379
-  username: ""
-  password: "Mc5XyLnhY4wZMI90"  # 直接填写明文密码（测试环境）
+  # 以下值从 connectionConfig.redis 继承（在 values-secrets.yaml 中设置）
+  host: ""       # 将由 connectionConfig.redis.host 填充
+  port: 6379     # 将由 connectionConfig.redis.port 填充
+  username: ""   # 将由 connectionConfig.redis.username 填充
+  password: ""   # 将由 connectionConfig.redis.password 填充
   # existingSecret: "dify-redis-secret"
-  useSSL: false
+  useSSL: false  # 将由 connectionConfig.redis.useSSL 填充
 
 ###################################
 # External Weaviate
@@ -3215,7 +3294,7 @@ externalRedis:
 externalWeaviate:
   enabled: false
   endpoint: "http://weaviate:8080"
-  apiKey: "WVF5YThaHlkYwhGUSmCRgsX3tD5ngdN8pkih"
+  apiKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
 
 ###################################
 # External Qdrant
@@ -3224,7 +3303,7 @@ externalWeaviate:
 externalQdrant:
   enabled: false
   endpoint: "https://your-qdrant-cluster-url.qdrant.tech/"
-  apiKey: "ak-difyai"
+  apiKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
   timeout: 20
   grpc:
     enabled: false
@@ -3235,12 +3314,12 @@ externalQdrant:
 # - these configs take effect only if both `externalWeaviate.enabled` and `externalQdrant.enabled` are set as `false` and `externalMilvus.enabled` is `true`
 ###################################
 externalMilvus:
-  enabled: true  # 启用外部 Milvus（docker-compose 运行在主节点）
-  uri: "http://192.168.44.231:19530"  # 使用主节点内网 IP 访问 Milvus
-  database: "default"
-  token: ""  # 如启用 Token 认证，请填写
-  user: "root"  # 如启用用户认证，请填写
-  password: "Milvus"  # 如启用密码，请填写
+  enabled: true  # 启用外部 Milvus
+  uri: "{{ .Values.connectionConfig.milvus.uri }}"
+  database: "{{ .Values.connectionConfig.milvus.database }}"
+  token: "{{ .Values.connectionConfig.milvus.token }}"
+  user: "{{ .Values.connectionConfig.milvus.user }}"
+  password: "{{ .Values.connectionConfig.milvus.password }}"
 
 ###################################
 # External Pgvector
@@ -3249,7 +3328,7 @@ externalMilvus:
 externalPgvector:
   enabled: false
   username: "postgres"
-  password: "difyai123456"
+  password: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
   address: "pgvector"
   port: 5432
   dbName: dify
