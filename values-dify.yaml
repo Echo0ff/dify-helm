@@ -1,83 +1,25 @@
-# Default values for dify.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
+# ============================================
+# Dify Helm Chart - 基础配置文件
+# ============================================
+# 说明：
+# - 本文件包含 Dify 的基础配置和默认值
+# - 敏感信息（密码、密钥等）请在 values-secrets.yaml 中配置
+# - 生产环境优化配置请在 values-dify-prod.yaml 中配置
+#
+# 部署命令：
+# helm upgrade dify ./charts/dify -n dify \
+#   -f values-dify.yaml \
+#   -f values-secrets.yaml \
+#   -f values-dify-prod.yaml
+# ============================================
 
 ###################################
-# 连接配置集中管理
-# 注意：敏感信息已移至 values-secrets.yaml
-# 使用方式：helm install -f values-dify.yaml -f values-secrets.yaml
+# 镜像配置
 ###################################
-connectionConfig:
-  # PostgreSQL 数据库配置
-  postgres:
-    enabled: true
-    host: "your-postgres-host"  # 在 values-secrets.yaml 中覆盖
-    port: 5432
-    username: "postgres"
-    password: "PLEASE_SET_IN_values-secrets.yaml"
-    database:
-      api: "dify"
-      pluginDaemon: "dify_plugin"
-
-  # Redis 配置
-  redis:
-    enabled: true
-    host: "your-redis-host"  # 在 values-secrets.yaml 中覆盖
-    port: 6379
-    username: ""
-    password: "PLEASE_SET_IN_values-secrets.yaml"
-    useSSL: false
-
-  # 阿里云 OSS 配置
-  oss:
-    enabled: true
-    endpoint: "https://oss-cn-hangzhou.aliyuncs.com"  # 在 values-secrets.yaml 中覆盖
-    accessKey: "PLEASE_SET_IN_values-secrets.yaml"
-    secretKey: "PLEASE_SET_IN_values-secrets.yaml"
-    region: "cn-hangzhou"
-    bucketName:
-      api: "your-bucket-name"  # 在 values-secrets.yaml 中覆盖
-      pluginDaemon: "your-bucket-name"
-    authVersion: "v4"
-    path: ""
-
-  # Milvus 向量数据库配置
-  milvus:
-    enabled: true
-    uri: "http://your-milvus-host:19530"  # 在 values-secrets.yaml 中覆盖
-    database: "default"
-    token: ""
-    user: "root"
-    password: "PLEASE_SET_IN_values-secrets.yaml"
-
-  # 应用配置
-  app:
-    secretKey: "PLEASE_SET_IN_values-secrets.yaml"
-    consoleSecretKey: "PLEASE_SET_IN_values-secrets.yaml"
-
-  # 邮件配置
-  mail:
-    type: "smtp"
-    defaultSendFrom: "noreply@yourdomain.com"
-    smtpServer: "smtp.yourdomain.com"
-    smtpPort: 587
-    smtpUsername: "your_email@yourdomain.com"
-    smtpPassword: "PLEASE_SET_IN_values-secrets.yaml"
-    smtpUseTLS: true
-
-  # 存储配置
-  storage:
-    type: "oss"
-    localPath: "storage"
-
-  # 日志配置
-  logging:
-    level: "INFO"
-
 image:
   api:
     repository: langgenius/dify-api
-    tag: "1.7.2"
+    tag: "1.8.1"
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -88,7 +30,7 @@ image:
 
   web:
     repository: langgenius/dify-web
-    tag: "1.7.2"
+    tag: "1.8.1"
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -211,20 +153,29 @@ api:
     # Won't check for updates if left empty
     #   value: https://updates.dify.ai
     value: ""
+
   - name: CODE_MAX_NUMBER
     value: "9223372036854775807"
   - name: CODE_MIN_NUMBER
     value: "-9223372036854775808"
+  - name: CODE_MAX_DEPTH
+    value: "10"
+  - name: CODE_MAX_PRECISION
+    value: "20"
   - name: CODE_MAX_STRING_LENGTH
     value: "80000"
-  - name: TEMPLATE_TRANSFORM_MAX_LENGTH
-    value: "80000"
   - name: CODE_MAX_STRING_ARRAY_LENGTH
-    value: "30"
+    value: "60"
   - name: CODE_MAX_OBJECT_ARRAY_LENGTH
-    value: "30"
+    value: "60"
   - name: CODE_MAX_NUMBER_ARRAY_LENGTH
     value: "1000"
+  - name: CODE_EXECUTION_CONNECT_TIMEOUT
+    value: "10"
+  - name: CODE_EXECUTION_READ_TIMEOUT
+    value: "360"
+  - name: CODE_EXECUTION_WRITE_TIMEOUT
+    value: "10"
   - name: LOG_TZ
     value: "Asia/Shanghai"
   ## OpenTelemetry (OTEL) configuration
@@ -377,6 +328,28 @@ worker:
   extraEnv:
   - name: LOG_TZ
     value: "Asia/Shanghai"
+  - name: CODE_MAX_NUMBER
+    value: "9223372036854775807"
+  - name: CODE_MIN_NUMBER
+    value: "-9223372036854775808"
+  - name: CODE_MAX_DEPTH
+    value: "10"
+  - name: CODE_MAX_PRECISION
+    value: "20"
+  - name: CODE_MAX_STRING_LENGTH
+    value: "80000"
+  - name: CODE_MAX_STRING_ARRAY_LENGTH
+    value: "60"
+  - name: CODE_MAX_OBJECT_ARRAY_LENGTH
+    value: "60"
+  - name: CODE_MAX_NUMBER_ARRAY_LENGTH
+    value: "1000"
+  - name: CODE_EXECUTION_CONNECT_TIMEOUT
+    value: "10"
+  - name: CODE_EXECUTION_READ_TIMEOUT
+    value: "360"
+  - name: CODE_EXECUTION_WRITE_TIMEOUT
+    value: "10"
   # Apply your own Environment Variables if necessary.
   # Variables defined here take higher priority than those from `ConfigMap` generated given `.Values`
   # The direct approach
@@ -434,6 +407,28 @@ beat:
   extraEnv:
   - name: LOG_TZ
     value: "Asia/Shanghai"
+  - name: CODE_MAX_NUMBER
+    value: "9223372036854775807"
+  - name: CODE_MIN_NUMBER
+    value: "-9223372036854775808"
+  - name: CODE_MAX_DEPTH
+    value: "10"
+  - name: CODE_MAX_PRECISION
+    value: "20"
+  - name: CODE_MAX_STRING_LENGTH
+    value: "80000"
+  - name: CODE_MAX_STRING_ARRAY_LENGTH
+    value: "60"
+  - name: CODE_MAX_OBJECT_ARRAY_LENGTH
+    value: "60"
+  - name: CODE_MAX_NUMBER_ARRAY_LENGTH
+    value: "1000"
+  - name: CODE_EXECUTION_CONNECT_TIMEOUT
+    value: "10"
+  - name: CODE_EXECUTION_READ_TIMEOUT
+    value: "360"
+  - name: CODE_EXECUTION_WRITE_TIMEOUT
+    value: "10"
   # Apply your own Environment Variables if necessary.
   # Variables defined here take higher priority than those from `ConfigMap` generated given `.Values`
   # - name: ENABLE_CLEAN_EMBEDDING_CACHE_TASK
@@ -3166,20 +3161,21 @@ redis:
     additionalAnnotations: {}
 
 ###################################
-# External postgres
-# - these configs are only used when `externalPostgres.enabled` is true
+# External PostgreSQL
+# 说明：外部 PostgreSQL 数据库配置
+# 使用场景：生产环境推荐使用外部托管数据库（如阿里云 RDS）
+# 配置方式：在 values-secrets.yaml 中配置实际值
 ###################################
 externalPostgres:
-  enabled: true  # 启用外部 PostgreSQL
-  # 以下值从 connectionConfig.postgres 继承（在 values-secrets.yaml 中设置）
-  username: ""  # 将由 connectionConfig.postgres.username 填充
-  address: ""   # 将由 connectionConfig.postgres.host 填充
-  port: 5432    # 将由 connectionConfig.postgres.port 填充
+  enabled: false  # 默认禁用，在 values-secrets.yaml 中启用
+  username: "postgres"
+  address: ""
+  port: 5432
   database:
-    api: ""     # 将由 connectionConfig.postgres.database.api 填充
-    pluginDaemon: ""  # 将由 connectionConfig.postgres.database.pluginDaemon 填充
-  password: ""  # 将由 connectionConfig.postgres.password 填充
-  # existingSecret: "dify-postgres-secret"
+    api: "dify"
+    pluginDaemon: "dify_plugin"
+  password: ""
+  # existingSecret: "dify-postgres-secret"  # 可选：使用 K8s Secret
 
 ###################################
 # External S3
@@ -3200,21 +3196,23 @@ externalAzureBlobStorage:
   container: "difyai-container"
 
 ###################################
-# External OSS
-# - these configs are only used when both `externalS3.enabled` and `externalAzureBlobStorage.enabled` are false and `externalOSS.enabled` is true
+# External OSS (阿里云对象存储)
+# 说明：阿里云 OSS 对象存储服务配置
+# 使用场景：用于存储文件、图片等静态资源
+# 配置方式：在 values-secrets.yaml 中配置实际值
+# 注意：当 externalS3 和 externalAzureBlobStorage 都禁用时生效
 ###################################
 externalOSS:
-  enabled: true  # 启用阿里云 OSS
-  # 以下值从 connectionConfig.oss 继承（在 values-secrets.yaml 中设置）
-  endpoint: ""      # 将由 connectionConfig.oss.endpoint 填充
-  accessKey: ""     # 将由 connectionConfig.oss.accessKey 填充
-  secretKey: ""     # 将由 connectionConfig.oss.secretKey 填充
-  region: ""        # 将由 connectionConfig.oss.region 填充
+  enabled: false  # 默认禁用，在 values-secrets.yaml 中启用
+  endpoint: ""
+  accessKey: ""
+  secretKey: ""
+  region: ""
   bucketName:
-    api: ""         # 将由 connectionConfig.oss.bucketName.api 填充
-    pluginDaemon: "" # 将由 connectionConfig.oss.bucketName.pluginDaemon 填充
-  authVersion: ""   # 将由 connectionConfig.oss.authVersion 填充
-  path: ""          # 将由 connectionConfig.oss.path 填充
+    api: ""
+    pluginDaemon: ""
+  authVersion: "v4"
+  path: ""
 
 ###################################
 # External Google Cloud Storage
@@ -3275,17 +3273,18 @@ externalTOS:
 
 ###################################
 # External Redis
-# - these configs are only used when `externalRedis.enabled` is true
+# 说明：外部 Redis 缓存服务配置
+# 使用场景：生产环境推荐使用外部 Redis 服务
+# 配置方式：在 values-secrets.yaml 中配置实际值
 ###################################
 externalRedis:
-  enabled: true
-  # 以下值从 connectionConfig.redis 继承（在 values-secrets.yaml 中设置）
-  host: ""       # 将由 connectionConfig.redis.host 填充
-  port: 6379     # 将由 connectionConfig.redis.port 填充
-  username: ""   # 将由 connectionConfig.redis.username 填充
-  password: ""   # 将由 connectionConfig.redis.password 填充
-  # existingSecret: "dify-redis-secret"
-  useSSL: false  # 将由 connectionConfig.redis.useSSL 填充
+  enabled: false  # 默认禁用，在 values-secrets.yaml 中启用
+  host: ""
+  port: 6379
+  username: ""
+  password: ""
+  useSSL: false
+  # existingSecret: "dify-redis-secret"  # 可选：使用 K8s Secret
 
 ###################################
 # External Weaviate
@@ -3310,16 +3309,19 @@ externalQdrant:
     port: 6334
 
 ###################################
-# External Milvus
-# - these configs take effect only if both `externalWeaviate.enabled` and `externalQdrant.enabled` are set as `false` and `externalMilvus.enabled` is `true`
+# External Milvus (向量数据库)
+# 说明：Milvus 向量数据库配置
+# 使用场景：用于存储和检索文档向量，支持语义搜索
+# 配置方式：在 values-secrets.yaml 中配置实际值
+# 注意：当 Weaviate 和 Qdrant 都禁用时生效
 ###################################
 externalMilvus:
-  enabled: true  # 启用外部 Milvus
-  uri: "{{ .Values.connectionConfig.milvus.uri }}"
-  database: "{{ .Values.connectionConfig.milvus.database }}"
-  token: "{{ .Values.connectionConfig.milvus.token }}"
-  user: "{{ .Values.connectionConfig.milvus.user }}"
-  password: "{{ .Values.connectionConfig.milvus.password }}"
+  enabled: false  # 默认禁用，在 values-secrets.yaml 中启用
+  uri: ""
+  database: "default"
+  token: ""
+  user: "root"
+  password: ""
 
 ###################################
 # External Pgvector

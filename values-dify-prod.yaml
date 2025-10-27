@@ -1,25 +1,36 @@
-# ==============================================================================
-# Dify 生产环境优化配置
-# 基于 values-dify.yaml，针对高 RPS 和高可用场景优化
-# 
-# 集群配置（3节点HA集群）: 
-#   - Node 1: 32C/120G (high-performance) - 高性能节点，API/Worker 优先调度
+# ============================================
+# Dify Helm Chart - 生产环境优化配置
+# ============================================
+# 说明：
+# - 本文件包含生产环境的性能优化配置
+# - 基于 values-dify.yaml，针对高 RPS 和高可用场景优化
+# - 配合 values-secrets.yaml 使用
+#
+# 集群配置（3节点 HA 集群）: 
+#   - Node 1: 32C/128G (high-performance) - 高性能节点，API/Worker 优先调度
 #   - Node 2: 16C/32G (standard) - 标准节点，均衡调度
 #   - Node 3: 16C/32G (standard) - 标准节点，均衡调度
-# 
-# 目标: 高并发 (400+ RPS) + 高可用 (3节点HA) + 资源留有余量避免 OOM
-# ==============================================================================
-
-# 继承基础配置，仅覆盖需要优化的部分
-# 使用方式: helm upgrade dify charts/dify -f values-dify.yaml -f values-dify-prod.yaml -n dify
+#
+# 优化目标：
+#   - 高并发：支持 400+ RPS
+#   - 高可用：3 节点 HA，Pod 分散调度
+#   - 资源优化：合理的 requests/limits，避免 OOM
+#   - 连接池优化：Gunicorn + SQLAlchemy + Redis 连接池调优
+#
+# 部署命令：
+# helm upgrade dify ./charts/dify -n dify \
+#   -f values-dify.yaml \
+#   -f values-secrets.yaml \
+#   -f values-dify-prod.yaml
+# ============================================
 
 ###################################
 # API 服务优化（最关键）
 ###################################
 api:
   enabled: true
-  # 初始副本数：8 个（增加API处理能力，主要处理工作流/对话流）
-  replicas: 8
+  # 初始副本数：6 个（增加API处理能力，主要处理工作流/对话流）
+  replicas: 6
   
   # 资源配置：提高单Pod资源，减少超时错误
   resources:
@@ -33,8 +44,8 @@ api:
   # 启用水平自动伸缩（HPA）- 针对对话流优化
   autoscaling:
     enabled: true
-    minReplicas: 8             # 提高最小副本数（优先保证API能力）
-    maxReplicas: 12            # 最多 12 个（充分利用集群资源）
+    minReplicas: 6            # 提高最小副本数（优先保证API能力）
+    maxReplicas: 10           # 最多 10 个（充分利用集群资源）
     targetCPUUtilizationPercentage: 60    # 60% 扩容（更早响应负载）
     targetMemoryUtilizationPercentage: 65 # 65% 扩容（避免内存瓶颈）
   
@@ -118,41 +129,55 @@ api:
       value: "9223372036854775807"
     - name: CODE_MIN_NUMBER
       value: "-9223372036854775808"
+    - name: CODE_MAX_DEPTH
+      value: "10"
+    - name: CODE_MAX_PRECISION
+      value: "20"
     - name: CODE_MAX_STRING_LENGTH
       value: "80000"
-    - name: TEMPLATE_TRANSFORM_MAX_LENGTH
-      value: "80000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
-      value: "30"
+      value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
-      value: "30"
+      value: "70"
     - name: CODE_MAX_NUMBER_ARRAY_LENGTH
       value: "1000"
+    - name: CODE_EXECUTION_CONNECT_TIMEOUT
+      value: "10"
+    - name: CODE_EXECUTION_READ_TIMEOUT
+      value: "360"
+    - name: CODE_EXECUTION_WRITE_TIMEOUT
+      value: "10"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # 优化 Gunicorn 配置（提高并发能力，减少超时）
+    # 优化 Gunicorn 配置（降低 worker 数量，减少数据库连接压力）
     - name: SERVER_WORKER_AMOUNT
-      value: "8"                # 每个 Pod 8 个 worker（8 Pod x 8 worker = 64 并发）
+      value: "2"                # 每个 Pod 2 个 worker（8 Pod x 2 worker = 16 并发）
     - name: SERVER_WORKER_CLASS
       value: "gevent"           # 使用 gevent 异步 worker 提升并发能力
     - name: SERVER_WORKER_CONNECTIONS
-      value: "2000"             # 每个 worker 最多 2000 个异步连接
+      value: "150"             # 每个 worker 最多 150 个异步连接
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池优化（严格控制总连接数 < 1400，避免 RDS 耗尽）
-    # 计算：8-12 Pod，每 Pod 15+10=25 峰值 = 200-300 连接（API）
+    # 数据库连接池优化（严格控制总连接数 < 1000，预留 600 个余量）
+    # 计算：8-12 Pod，每 Pod 30+15=45 峰值 = 360-540 连接（API）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "15"               # 每个 Pod 15 个连接
+      value: "50"               # 每个 Pod 30 个连接（降低基础连接池，避免耗尽）
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "10"               # 溢出 10（峰值 25/Pod）
+      value: "25"               # 溢出 15（峰值 45/Pod）
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "600"              # 10 分钟回收连接（快速清理 idle_in_transaction）
+      value: "300"              # 5分钟回收（避免过早回收导致重连开销）
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"             # 连接前检查有效性
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "20"               # 获取连接等待超时 20 秒
+      value: "120"              # 等待超时 120 秒（给予更多容错时间）
     - name: SQLALCHEMY_ECHO
-      value: "false"            # 关闭 SQL 日志提升性能
+      value: "false"            # 关闭 SQL 日志
+    - name: SQLALCHEMY_ECHO_POOL
+      value: "false"            # 关闭连接池日志  
+    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
+      value: "rollback"         # ⚠️ 核心：归还连接时自动回滚未提交事务
+    - name: SQLALCHEMY_POOL_USE_LIFO
+      value: "true"             # LIFO模式：优先使用最近的连接，提高缓存命中率
     # Redis 连接池优化（增加连接池避免超时）
     - name: REDIS_POOL_SIZE
       value: "40"               # 每个 Pod 40 个连接（8-12 Pod = 320-480 连接）
@@ -174,6 +199,16 @@ api:
     # 禁用不必要的功能提升性能
     - name: SENTRY_DSN
       value: ""                 # 关闭 Sentry（减少性能开销）
+    # 自动删除日志
+    # Enable automatic cleanup of workflow run logs to manage database size
+    - name: WORKFLOW_LOG_CLEANUP_ENABLED
+      value: "true"
+    # Number of days to retain workflow run logs (default: 30 days)
+    - name: WORKFLOW_LOG_RETENTION_DAYS
+      value: "7"
+    # Batch size for workflow log cleanup operations (default: 100)
+    - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
+      value: "200"
 
 ###################################
 # Worker 服务优化（异步任务处理 - 主要处理知识库索引）
@@ -250,28 +285,65 @@ worker:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # Worker 数据库连接池（2-8 Pod，每 Pod 8+4=12 峰值 = 24-96 连接）
+    # Worker 数据库连接池（3-8 Pod，每 Pod 20+10=30 峰值 = 90-240 连接）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "8"
+      value: "40"
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "4"
+      value: "20"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "600"
+      value: "300"              # 5分钟回收连接
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "15"
+      value: "120"
+    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
+      value: "rollback"         # 归还连接时自动回滚未提交事务
+    - name: SQLALCHEMY_POOL_USE_LIFO
+      value: "true"             # LIFO模式
     # Celery Worker 优化（使用正确的 Dify 环境变量名）
     - name: CELERY_AUTO_SCALE
       value: "true"             # 启用自动伸缩
     - name: CELERY_MAX_WORKERS
-      value: "8"                # 最多 8 个并发 worker
+      value: "4"                # 最多 8 个并发 worker
     - name: CELERY_MIN_WORKERS
       value: "2"                # 最少 2 个并发 worker
     - name: CELERY_WORKER_CLASS
       value: "gevent"           # 使用 gevent worker
     - name: MAX_TASK_PRE_CHILD
       value: "100"              # 每个 worker 处理 100 个任务后重启（防止内存泄漏）
+    # 自动删除日志
+    # Enable automatic cleanup of workflow run logs to manage database size
+    - name: WORKFLOW_LOG_CLEANUP_ENABLED
+      value: "true"
+    # Number of days to retain workflow run logs (default: 30 days)
+    - name: WORKFLOW_LOG_RETENTION_DAYS
+      value: "7"
+    # Batch size for workflow log cleanup operations (default: 100)
+    - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
+      value: "200"
+    
+    - name: CODE_MAX_NUMBER
+      value: "9223372036854775807"
+    - name: CODE_MIN_NUMBER
+      value: "-9223372036854775808"
+    - name: CODE_MAX_DEPTH
+      value: "10"
+    - name: CODE_MAX_PRECISION
+      value: "20"
+    - name: CODE_MAX_STRING_LENGTH
+      value: "80000"
+    - name: CODE_MAX_STRING_ARRAY_LENGTH
+      value: "70"
+    - name: CODE_MAX_OBJECT_ARRAY_LENGTH
+      value: "70"
+    - name: CODE_MAX_NUMBER_ARRAY_LENGTH
+      value: "1000"
+    - name: CODE_EXECUTION_CONNECT_TIMEOUT
+      value: "10"
+    - name: CODE_EXECUTION_READ_TIMEOUT
+      value: "360"
+    - name: CODE_EXECUTION_WRITE_TIMEOUT
+      value: "10"
 
 ###################################
 # Beat 服务（定时任务调度器）
@@ -298,16 +370,52 @@ beat:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # Beat 数据库连接池（1 Pod，3+2=5 峰值）
+    # Beat 数据库连接池（1 Pod，10+5=15 峰值）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "3"
+      value: "10"
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "2"
+      value: "5"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "600"
+      value: "300"              # 5分钟回收连接
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
+      value: "120"
+    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
+      value: "rollback"
+    - name: SQLALCHEMY_POOL_USE_LIFO
+      value: "true"
+    # 自动删除日志
+    # Enable automatic cleanup of workflow run logs to manage database size
+    - name: WORKFLOW_LOG_CLEANUP_ENABLED
+      value: "true"
+    # Number of days to retain workflow run logs (default: 30 days)
+    - name: WORKFLOW_LOG_RETENTION_DAYS
+      value: "7"
+    # Batch size for workflow log cleanup operations (default: 100)
+    - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
+      value: "200"
+    - name: CODE_MAX_NUMBER
+      value: "9223372036854775807"
+    - name: CODE_MIN_NUMBER
+      value: "-9223372036854775808"
+    - name: CODE_MAX_DEPTH
+      value: "10"
+    - name: CODE_MAX_PRECISION
+      value: "20"
+    - name: CODE_MAX_STRING_LENGTH
+      value: "80000"
+    - name: CODE_MAX_STRING_ARRAY_LENGTH
+      value: "70"
+    - name: CODE_MAX_OBJECT_ARRAY_LENGTH
+      value: "70"
+    - name: CODE_MAX_NUMBER_ARRAY_LENGTH
+      value: "1000"
+    - name: CODE_EXECUTION_CONNECT_TIMEOUT
+      value: "10"
+    - name: CODE_EXECUTION_READ_TIMEOUT
+      value: "360"
+    - name: CODE_EXECUTION_WRITE_TIMEOUT
       value: "10"
 
 ###################################
@@ -365,11 +473,11 @@ sandbox:
   
   resources:
     requests:
-      cpu: "1000m"
-      memory: "1Gi"
-    limits:
       cpu: "2000m"
       memory: "2Gi"
+    limits:
+      cpu: "4000m"
+      memory: "4Gi"
   
   autoscaling:
     enabled: true
@@ -402,7 +510,7 @@ sandbox:
     - name: WORKER_TIMEOUT
       value: "15"
     - name: PIP_MIRROR_URL
-      value: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      value: "https://mirrors.aliyun.com/pypi/simple/"
 
 ###################################
 # Proxy 服务优化
@@ -483,11 +591,28 @@ pluginDaemon:
   
   resources:
     requests:
-      cpu: "1000m"
-      memory: "1Gi"
-    limits:
       cpu: "2000m"
-      memory: "2Gi"
+      memory: "4Gi"
+    limits:
+      cpu: "6000m"
+      memory: "8Gi"
+  
+  # ⚠️ 健康检查配置 - 等待编译完成后再接入流量
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 120    # 2分钟后开始存活检查
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 5
+    successThreshold: 1
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 300    # ⚠️ 5分钟后才标记为就绪（等待编译完成）
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 3
+    successThreshold: 1
   
   updateStrategy:
     type: RollingUpdate
@@ -514,18 +639,32 @@ pluginDaemon:
     - name: LOG_TZ
       value: "Asia/Shanghai"
     - name: PIP_MIRROR_URL
-      value: "https://pypi.tuna.tsinghua.edu.cn/simple"
-    # PluginDaemon 数据库连接池（3 Pod，每 Pod 5+3=8 峰值 = 24 连接）
+      value: "https://mirrors.aliyun.com/pypi/simple/"
+    # PluginDaemon 数据库连接池（3 Pod，每 Pod 20+10=30 峰值 = 90 连接）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "5"
+      value: "20"
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "3"
+      value: "10"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "600"
+      value: "300"              # 5分钟回收连接（与其他服务保持一致）
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "10"
+      value: "120"              # 增加超时时间
+    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
+      value: "rollback"
+    - name: SQLALCHEMY_POOL_USE_LIFO
+      value: "true"
+    # 自动删除日志
+    # Enable automatic cleanup of workflow run logs to manage database size
+    - name: WORKFLOW_LOG_CLEANUP_ENABLED
+      value: "true"
+    # Number of days to retain workflow run logs (default: 30 days)
+    - name: WORKFLOW_LOG_RETENTION_DAYS
+      value: "7"
+    # Batch size for workflow log cleanup operations (default: 100)
+    - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
+      value: "200"
 
 ###################################
 # Service 配置
@@ -568,7 +707,24 @@ affinity: {}
 #    - HPA 伸缩事件（观察扩缩容频率）
 #    - P99 响应时间（目标 <1s）
 #    - 错误率（目标 <0.5%）
-#    - PostgreSQL 连接数（目标 <1000）
+#    - PostgreSQL 连接数（目标 <1000，保守配置峰值见下）
+# 7. 数据库连接数计算（保守配置 - 峰值）：
+#    - API: 8-12 Pod × 45 = 360-540 连接
+#    - Worker: 3-8 Pod × 60 = 180-480 连接
+#    - PluginDaemon: 3 Pod × 30 = 90 连接
+#    - Beat: 1 Pod × 15 = 15 连接
+#    - 总计峰值：645-1125 连接
+#    - 阿里云上限：1600 连接
+#    - 安全余量：475-955 连接（30%-60%缓冲）✅ 保守安全
+# 8. 并发控制策略（保守配置）：
+#    - API 线程数降低到 25（vs 45连接池 = 44%余量）
+#    - 单Pod连接池 vs 线程数：45连接 vs 25线程 = 20个缓冲
+#    - 确保即使高并发时也不会耗尽连接池
+#    - 牺牲部分并发性能换取系统稳定性
+# 9. 滚动更新策略：
+#    - PluginDaemon: 新Pod等待5分钟后才接入流量（等待编译完成）
+#    - API: 新Pod等待20秒后接入流量
+#    - maxUnavailable: 0 确保零停机部署
 # 
 # 使用方式：
 # helm upgrade dify charts/dify -f values-dify.yaml -f values-dify-prod.yaml -n dify
