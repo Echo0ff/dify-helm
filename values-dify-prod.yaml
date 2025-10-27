@@ -45,7 +45,7 @@ api:
   autoscaling:
     enabled: true
     minReplicas: 6            # 提高最小副本数（优先保证API能力）
-    maxReplicas: 10           # 最多 10 个（充分利用集群资源）
+    maxReplicas: 12           # 最多 10 个（充分利用集群资源）
     targetCPUUtilizationPercentage: 60    # 60% 扩容（更早响应负载）
     targetMemoryUtilizationPercentage: 65 # 65% 扩容（避免内存瓶颈）
   
@@ -205,7 +205,7 @@ api:
       value: "true"
     # Number of days to retain workflow run logs (default: 30 days)
     - name: WORKFLOW_LOG_RETENTION_DAYS
-      value: "7"
+      value: "4"
     # Batch size for workflow log cleanup operations (default: 100)
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
       value: "200"
