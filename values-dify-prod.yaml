@@ -577,11 +577,11 @@ ssrfProxy:
   
   resources:
     requests:
-      cpu: "200m"
-      memory: "128Mi"
-    limits:
       cpu: "500m"
-      memory: "256Mi"
+      memory: "1Gi"           # 提高到 1Gi
+    limits:
+      cpu: "1000m"              # 提高到 1 核（原500m）
+      memory: "2Gi"             # 提高到 2Gi 避免OOMKilled
   
   updateStrategy:
     type: RollingUpdate
