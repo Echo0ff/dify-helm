@@ -178,7 +178,7 @@ api:
     - name: SQLALCHEMY_MAX_OVERFLOW
       value: "25"               # 溢出 15（峰值 45/Pod）
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "300"              # 5分钟回收（避免过早回收导致重连开销）
+      value: "270"              # ⚠️ 240秒回收（数据库超时300秒，留20%安全边界）
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"             # 连接前检查有效性
     - name: SQLALCHEMY_POOL_TIMEOUT
@@ -304,7 +304,7 @@ worker:
     - name: SQLALCHEMY_MAX_OVERFLOW
       value: "20"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "300"              # 5分钟回收连接
+      value: "270"              # 240秒回收连接（数据库超时300秒，留20%安全边界）
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
@@ -389,7 +389,7 @@ beat:
     - name: SQLALCHEMY_MAX_OVERFLOW
       value: "5"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "300"              # 5分钟回收连接
+      value: "270"              # 240秒回收连接（数据库超时300秒）
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
@@ -659,7 +659,7 @@ pluginDaemon:
     - name: SQLALCHEMY_MAX_OVERFLOW
       value: "10"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "300"              # 5分钟回收连接（与其他服务保持一致）
+      value: "270"              # 240秒回收连接（数据库超时300秒）
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
