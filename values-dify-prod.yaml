@@ -40,6 +40,19 @@ api:
     limits:
       cpu: "6000m"      # 最多 6 核
       memory: "6Gi"     # 最多 6G（给予充足上限）
+
+  # 自定义 prompts
+  persistence:
+    enabled: true
+    volumes:
+      - name: custom-prompts
+        configMap:
+          name: dify-prompts
+    volumeMounts:
+      - name: custom-prompts
+        mountPath: /app/api/core/llm_generator/prompts.py
+        subPath: prompts.py
+        readOnly: true
   
   # 启用水平自动伸缩（HPA）- 针对对话流优化
   autoscaling:
