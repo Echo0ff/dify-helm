@@ -30,7 +30,7 @@
 api:
   enabled: true
   # 初始副本数：6 个（增加API处理能力，主要处理工作流/对话流）
-  replicas: 6
+  replicas: 9
   
   # 资源配置：提高单Pod资源，减少超时错误
   resources:
@@ -57,7 +57,7 @@ api:
   # 启用水平自动伸缩（HPA）- 针对对话流优化
   autoscaling:
     enabled: true
-    minReplicas: 6            # 提高最小副本数（优先保证API能力）
+    minReplicas: 9            # 提高最小副本数（优先保证API能力）
     maxReplicas: 12           # 最多 10 个（充分利用集群资源）
     targetCPUUtilizationPercentage: 60    # 60% 扩容（更早响应负载）
     targetMemoryUtilizationPercentage: 65 # 65% 扩容（避免内存瓶颈）
@@ -740,6 +740,8 @@ affinity: {}
 #    - maxUnavailable: 0 确保零停机部署
 # 
 # 使用方式：
-# helm upgrade dify charts/dify -f values-dify.yaml -f values-dify-prod.yaml -n dify
+# helm upgrade dify charts/dify -f values-dify.yaml -f values-secrets.yaml -f values-dify-prod.yaml -n dify
 # ==============================================================================
+# 
+# 注意：邮件配置请在 values-secrets.yaml 中配置（包含敏感信息）
 
