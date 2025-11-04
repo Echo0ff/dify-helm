@@ -175,17 +175,17 @@ api:
     - name: SERVER_WORKER_CLASS
       value: "gevent"           # 使用 gevent 异步 worker 提升并发能力
     - name: SERVER_WORKER_CONNECTIONS
-      value: "60"               # ⚠️ 从100降到60，减少并发压力（9×2×60=1080协程）
+      value: "50"               # ⚠️ 从100降到60，减少并发压力（9×2×60=1080协程）
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池优化（⚠️ 增加连接池大小，达到接近1:1比例）
-    # 并发协程：9 Pod × 2 Worker × 60 = 1,080 协程
-    # 数据库连接：9 Pod × 120 = 1,080 连接（1:1完美比例 ✅）
-    # 总连接预估：API 1080 + Worker 480 + 其他 105 = 1,665（峰值略超1600但可接受）
+    # 数据库连接池优化（🔴 紧急修复：连接数打满 1600/1600）
+    # 问题：之前配置导致连接数超限（9×115=1035 + Worker 180 + 其他 = 1300+）
+    # 修复：大幅降低连接池，防止耗尽数据库连接
+    # 新配置：9 Pod × 40 = 360（API）+ Worker 180 + 其他 105 = 645 连接（安全余量 60%）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "90"               # ⚠️ 从70增到90（增加基础连接池）
+      value: "50"               # 🔴 紧急降低（从 90 → 25）
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "25"               # 保持25（峰值 115/Pod）
+      value: "20"               # 保持25（峰值 115/Pod）
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"              # ⚠️ 240秒回收（数据库超时300秒，留20%安全边界）
     - name: SQLALCHEMY_POOL_PRE_PING
