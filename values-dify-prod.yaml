@@ -32,6 +32,13 @@ api:
   # 初始副本数：6 个（增加API处理能力，主要处理工作流/对话流）
   replicas: 9
   
+  # ⚠️ 外部访问URL配置（解决工作流发布URL问题）
+  # 只配置工作流发布需要的URL，其他保持默认（使用same domain）
+  url:
+    # 应用Web URL（⚠️ 关键：工作流发布时使用此URL）
+    # 修复从 http://dify-ups/workflow/xxx 到正确的外部地址
+    appWeb: "http://dify.wsljf.xyz"
+  
   # 资源配置：提高单Pod资源，减少超时错误
   resources:
     requests:
@@ -162,21 +169,23 @@ api:
       value: "10"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # 优化 Gunicorn 配置（降低 worker 数量，减少数据库连接压力）
+    # 优化 Gunicorn 配置（⚠️ 调整为接近1:1比例，解决QueuePool limit exceeded问题）
     - name: SERVER_WORKER_AMOUNT
-      value: "2"                # 每个 Pod 2 个 worker（8 Pod x 2 worker = 16 并发）
+      value: "2"                # 每个 Pod 2 个 worker
     - name: SERVER_WORKER_CLASS
       value: "gevent"           # 使用 gevent 异步 worker 提升并发能力
     - name: SERVER_WORKER_CONNECTIONS
-      value: "150"             # 每个 worker 最多 150 个异步连接
+      value: "60"               # ⚠️ 从100降到60，减少并发压力（9×2×60=1080协程）
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池优化（严格控制总连接数 < 1000，预留 600 个余量）
-    # 计算：8-12 Pod，每 Pod 30+15=45 峰值 = 360-540 连接（API）
+    # 数据库连接池优化（⚠️ 增加连接池大小，达到接近1:1比例）
+    # 并发协程：9 Pod × 2 Worker × 60 = 1,080 协程
+    # 数据库连接：9 Pod × 120 = 1,080 连接（1:1完美比例 ✅）
+    # 总连接预估：API 1080 + Worker 480 + 其他 105 = 1,665（峰值略超1600但可接受）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "50"               # 每个 Pod 30 个连接（降低基础连接池，避免耗尽）
+      value: "90"               # ⚠️ 从70增到90（增加基础连接池）
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "25"               # 溢出 15（峰值 45/Pod）
+      value: "25"               # 保持25（峰值 115/Pod）
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"              # ⚠️ 240秒回收（数据库超时300秒，留20%安全边界）
     - name: SQLALCHEMY_POOL_PRE_PING
@@ -298,7 +307,7 @@ worker:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # Worker 数据库连接池（3-8 Pod，每 Pod 20+10=30 峰值 = 90-240 连接）
+    # Worker 数据库连接池（3-8 Pod × 60 = 180-480 连接）
     - name: SQLALCHEMY_POOL_SIZE
       value: "40"
     - name: SQLALCHEMY_MAX_OVERFLOW
