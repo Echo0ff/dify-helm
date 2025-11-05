@@ -614,27 +614,23 @@ pluginDaemon:
   resources:
     requests:
       cpu: "2000m"
-      memory: "4Gi"
+      memory: "8Gi"
     limits:
       cpu: "6000m"
-      memory: "8Gi"
+      memory: "12Gi"
   
-  # ⚠️ 健康检查配置 - 等待编译完成后再接入流量
-  livenessProbe:
-    enabled: true
-    initialDelaySeconds: 120    # 2分钟后开始存活检查
-    periodSeconds: 30
-    timeoutSeconds: 10
-    failureThreshold: 5
-    successThreshold: 1
-  
-  readinessProbe:
-    enabled: true
-    initialDelaySeconds: 300    # ⚠️ 5分钟后才标记为就绪（等待编译完成）
-    periodSeconds: 10
-    timeoutSeconds: 10
-    failureThreshold: 3
-    successThreshold: 1
+  # ⚠️ 延迟接入流量配置：使用 tcpSocket 检查端口监听
+  # 由于 plugin-daemon 没有 /health 端点，使用 tcpSocket 检查 5002 端口是否监听
+  # initialDelaySeconds: 180 秒（3 分钟）是插件编译的合理等待时间
+  # 配合较高的 failureThreshold，即使编译时间较长也能容错
+  customReadinessProbe:
+    tcpSocket:
+      port: 5002
+    initialDelaySeconds: 240    # 4 分钟后开始检查（平衡速度和稳定性）
+    periodSeconds: 10           # 每 10 秒检查一次
+    timeoutSeconds: 5           # 5 秒超时
+    failureThreshold: 30        # ⚠️ 允许 30 次失败（30×10秒=5分钟额外容错时间）
+    successThreshold: 1         # 1 次成功即标记为就绪
   
   updateStrategy:
     type: RollingUpdate
