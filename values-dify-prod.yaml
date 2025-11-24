@@ -38,6 +38,7 @@ api:
     # 应用Web URL（⚠️ 关键：工作流发布时使用此URL）
     # 修复从 http://dify-ups/workflow/xxx 到正确的外部地址
     appWeb: "http://dify.wsljf.xyz"
+    files: "http://dify.wsljf.xyz"
   
   # 资源配置：提高单Pod资源，减少超时错误
   resources:
