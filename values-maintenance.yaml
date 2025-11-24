@@ -1,0 +1,62 @@
+# ============================================
+# Dify 维护模式配置
+# ============================================
+# 用途：数据库升配等维护操作时，临时停止所有服务
+# 使用方法：
+#   1. 进入维护模式（停止所有服务）：
+#      helm upgrade dify charts/dify -n dify \
+#        -f values-dify.yaml \
+#        -f values-secrets.yaml \
+#        -f values-dify-prod.yaml \
+#        -f values-maintenance.yaml
+#
+#   2. 退出维护模式（恢复服务）：
+#      helm upgrade dify charts/dify -n dify \
+#        -f values-dify.yaml \
+#        -f values-secrets.yaml \
+#        -f values-dify-prod.yaml
+#
+# 注意：此配置会将所有服务的副本数设置为 0，但保留所有配置和 PVC
+# ============================================
+
+# 停止所有服务
+api:
+  enabled: true
+  replicas: 0
+  autoscaling:
+    enabled: false  # 禁用自动伸缩，避免 HPA 自动恢复
+
+worker:
+  enabled: true
+  replicas: 0
+  autoscaling:
+    enabled: false
+
+beat:
+  enabled: true
+  replicas: 0
+
+web:
+  enabled: true
+  replicas: 0
+  autoscaling:
+    enabled: false
+
+sandbox:
+  enabled: true
+  replicas: 0
+  autoscaling:
+    enabled: false
+
+proxy:
+  enabled: true
+  replicas: 0
+
+ssrfProxy:
+  enabled: true
+  replicas: 0
+
+pluginDaemon:
+  enabled: true
+  replicas: 0
+
