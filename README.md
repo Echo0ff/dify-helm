@@ -6,6 +6,10 @@
 
 Deploy [langgenius/dify](https://github.com/langgenius/dify), an LLM-based chatbot app on Kubernetes with Helm chart.
 
+## Prerequisites
+- **Kubernetes**: 1.23+
+- **Helm**: 3.12+
+
 ## Installation
 ### TL;DR
 ```shell
@@ -14,6 +18,7 @@ helm repo update
 helm install my-release dify/dify
 ```
 For customized installation, please refer to the [README.md](https://github.com/BorisPolonsky/dify-helm/blob/master/charts/dify/README.md) file.
+
 ## Network Architecture
 
 The following diagram illustrates the complete network architecture and service topology of the Dify Helm deployment:
@@ -38,15 +43,15 @@ graph TB
     ProxyPod -->|Marketplace| MarketplaceAPI[🛒 Marketplace API<br/>External]
 
     %% Backend Pods
-    APIService --> APIPod[📦 API Pod<br/>langgenius/dify-api:1.8.1<br/>Port: 5001]
-    WebService --> WebPod[📦 Web Pod<br/>langgenius/dify-web:1.8.1<br/>Port: 3000]
-    PluginService --> PluginPod[📦 Plugin Daemon Pod<br/>langgenius/dify-plugin-daemon:0.2.0-local<br/>Port: 5002, 5003]
+    APIService --> APIPod[📦 API Pod<br/>langgenius/dify-api:1.10.1<br/>Port: 5001]
+    WebService --> WebPod[📦 Web Pod<br/>langgenius/dify-web:1.10.1<br/>Port: 3000]
+    PluginService --> PluginPod[📦 Plugin Daemon Pod<br/>langgenius/dify-plugin-daemon:0.4.1-local<br/>Ports: 5002, 5003]
 
     %% Worker Pod (Background Processing)
-    WorkerPod[📦 Worker Pod<br/>langgenius/dify-api:1.8.1]
+    WorkerPod[📦 Worker Pod<br/>langgenius/dify-api:1.10.1]
 
     %% Beat Pod (Periodic task scheduler)
-    BeatPod[📦 Beat Pod<br/>langgenius/dify-api:1.8.1]
+    BeatPod[📦 Beat Pod<br/>langgenius/dify-api:1.10.1]
 
     %% Sandbox Service
     SandboxService[🏖️ Sandbox Service<br/>Port: 8194] --> SandboxPod[📦 Sandbox Pod<br/>langgenius/dify-sandbox:0.2.12<br/>Port: 8194]
@@ -113,7 +118,7 @@ graph TB
 
     %% External Dependencies
     subgraph ExternalServices [🌐 External Services]
-        ExternalDB[(🔧 External PostgreSQL)]
+        ExternalDB[(🔧 External PostgreSQL/MySQL)]
         ExternalRedis[(🔴 External Redis)]
         ExternalVector[(🧮 External Vector DB)]
         ExternalStorage[(💾 External Object Storage)]
@@ -150,6 +155,7 @@ The Nginx proxy handles traffic routing with the following rules:
 /e/          → Plugin Daemon (5002)
 /explore     → Web Service (3000)
 /marketplace → External Marketplace API
+/triggers    → API Service (5001)
 /            → Web Service (3000) [Default Route]
 ```
 
@@ -157,20 +163,21 @@ The Nginx proxy handles traffic routing with the following rules:
 
 | Component | Image | Port | Role |
 |-----------|-------|------|------|
-| **API** | `langgenius/dify-api:1.8.1` | 5001 | RESTful API server, business logic processing |
-| **Web** | `langgenius/dify-web:1.8.1` | 3000 | Web UI frontend |
-| **Worker** | `langgenius/dify-api:1.8.1` | - | Background task processing (Celery) |
-| **Beat** | `langgenius/dify-api:1.8.1` | - | Periodic task scheduler (Celery Beat) |
+| **API** | `langgenius/dify-api:1.10.1` | 5001 | RESTful API server, business logic processing |
+| **Web** | `langgenius/dify-web:1.10.1` | 3000 | Web UI frontend |
+| **Worker** | `langgenius/dify-api:1.10.1` | - | Background task processing (Celery) |
+| **Beat** | `langgenius/dify-api:1.10.1` | - | Periodic task scheduler (Celery Beat) |
 | **Sandbox** | `langgenius/dify-sandbox:0.2.12` | 8194 | Secure code execution environment |
-| **Plugin Daemon** | `langgenius/dify-plugin-daemon:0.2.0-local` | 5002, 5003 | Plugin management and execution |
+| **Plugin Daemon** | `langgenius/dify-plugin-daemon:0.4.1-local` | 5002, 5003 | Plugin management and execution |
 | **SSRF Proxy** | `ubuntu/squid:latest` | 3128 | External request security proxy |
 | **Nginx Proxy** | `nginx:latest` | 80 | Reverse proxy, load balancing |
 
-### External Components Supported by this App with Proper Configuration
-
-- [x] Redis
-- [x] PostgreSQL
-- Object Storage:
+### Supported External Components
+- [x] Redis (Standalone and Sentinel)
+- [x] External Database
+  - [x] PostgreSQL
+  - [x] MySQL
+- [x] Object Storage:
   - [x] Amazon S3
   - [x] Microsoft Azure Blob Storage
   - [x] Alibaba Cloud OSS
@@ -178,7 +185,7 @@ The Nginx proxy handles traffic routing with the following rules:
   - [x] Tencent Cloud COS
   - [x] Huawei Cloud OBS
   - [x] Volcengine TOS
-- External Vector DB:
+- [x] External Vector DB:
   - [x] Weaviate
   - [x] Qdrant
   - [x] Milvus
@@ -186,51 +193,7 @@ The Nginx proxy handles traffic routing with the following rules:
   - [x] Tencent Vector DB
   - [x] MyScaleDB
   - [x] TableStore
-  - [x] elasticsearch
-
-## ExternalSecret Support
-
-### Background
-
-In Kubernetes production environments, storing sensitive information (such as database passwords, API keys, etc.) directly in values.yaml is insecure. The ExternalSecret feature solves this problem through the [External Secrets Operator](https://external-secrets.io/), which can securely retrieve sensitive information from external secret management systems (such as AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, etc.) and automatically create Kubernetes Secret resources.
-
-Why ExternalSecret is needed:
-
-- **Security**: Avoid storing plain text passwords in Git repositories or configuration files
-- **Centralized Management**: Unified management of all sensitive information
-- **Automatic Rotation**: Support for automatic key updates and rotation
-- **Compliance**: Meet enterprise security and compliance requirements
-
-### Currently Supported External Components
-
-When ExternalSecret is enabled, sensitive information for the following components can be retrieved from external secret stores:
-
-#### Database Connections
-
-- **PostgreSQL**: Database username, password
-- **Redis**: Authentication password, username
-- **Elasticsearch**: Username, password
-
-#### Object Storage
-
-- **AWS S3**: Access Key ID, Secret Access Key
-
-#### Vector Databases
-
-- **ElasticSearch**: Username, Password
-
-#### Email Services
-
-- **Resend**: API Key, sender email
-- **SendGrid**: API Key, sender email
-
-#### Other Services
-
-- **Code Execution Service**: API Key
-- **Plugin System**: Daemon Key, internal API Key
-- **Application Core**: Secret Key
-
-Usage: Set `externalSecret.enabled: true` in values.yaml and configure the corresponding secretStore and remoteRefs parameters.
+  - [x] Elasticsearch
 
 ## Contributors
 

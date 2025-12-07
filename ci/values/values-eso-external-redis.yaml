@@ -1,12 +1,12 @@
 image:
   api:
     repository: langgenius/dify-api
-    tag: "1.8.1"
+    tag: "1.10.1"
     pullPolicy: IfNotPresent
 
   web:
     repository: langgenius/dify-web
-    tag: "1.8.1"
+    tag: "1.10.1"
     pullPolicy: IfNotPresent
 
   sandbox:
@@ -26,7 +26,7 @@ image:
 
   pluginDaemon:
     repository: langgenius/dify-plugin-daemon
-    tag: 0.2.0-local
+    tag: 0.4.1-local
     pullPolicy: IfNotPresent
 
 api:
@@ -77,14 +77,26 @@ api:
   customReadinessProbe: {}
   ## @param api.customStartupProbe Custom startupProbe that overrides the default one
   customStartupProbe: {}
-  # Configure Pods Security Context
-  podSecurityContext: {}
-  # Configure Container Security Context
-  containerSecurityContext: {}
+  ## Configure Pods Security Context
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+  ## @param api.podSecurityContext.enabled Enabled Dify api pod's Security Context
+  ## @param api.podSecurityContext.fsGroup Set Dify api pod's Security Context fsGroup
+  ##
+  podSecurityContext:
+    enabled: true
+    fsGroup: 1001
+  ## Configure Container Security Context
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+  ## @param api.containerSecurityContext.enabled Dify api containers' Security Context
+  ## @param api.containerSecurityContext.runAsUser Set Dify api containers' Security Context runAsUser
+  ##
+  containerSecurityContext:
+    enabled: true
+    runAsUser: 1001
   extraEnv:
     # Apply your own Environment Variables if necessary.
     # Variables defined here take higher priority than those from `ConfigMap` generated given `.Values`
-    # The direct approach
+  # Direct value assignment
     # - name: LANG
     #   value: "C.UTF-8"
     #   - name: SECRET_KEY
@@ -227,14 +239,26 @@ worker:
   ## @param worker.updateStrategy Update strategy type and configuration parameters
   ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
   updateStrategy: {}
-  # Configure Pods Security Context
-  podSecurityContext: {}
-  # Configure Container Security Context
-  containerSecurityContext: {}
+  ## Configure Pods Security Context
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+  ## @param worker.podSecurityContext.enabled Enabled Dify worker pod's Security Context
+  ## @param worker.podSecurityContext.fsGroup Set Dify worker pod's Security Context fsGroup
+  ##
+  podSecurityContext:
+    enabled: true
+    fsGroup: 1001
+  ## Configure Container Security Context
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+  ## @param worker.containerSecurityContext.enabled Dify worker containers' Security Context
+  ## @param worker.containerSecurityContext.runAsUser Set Dify worker containers' Security Context runAsUser
+  ##
+  containerSecurityContext:
+    enabled: true
+    runAsUser: 1001
   extraEnv:
   # Apply your own Environment Variables if necessary.
   # Variables defined here take higher priority than those from `ConfigMap` generated given `.Values`
-  # The direct approach
+  # Direct value assignment
   # - name: LANG
   #   value: "C.UTF-8"
   #   - name: SECRET_KEY
@@ -312,11 +336,7 @@ proxy:
         accessModes: ReadWriteMany
         size: 1Gi
         subPath: ""
-  service:
-    port: 80
-    annotations: {}
-    labels: {}
-    clusterIP: ""
+
   ## Proxy ServiceAccount configuration
   ##
   serviceAccount:
@@ -724,14 +744,14 @@ weaviate:
   enabled: true
   image:
     # registry where weaviate image is stored
-    registry: docker.io
+    registry: cr.weaviate.io
     # Tag of weaviate image to deploy
     # Note: We strongly recommend you overwrite this value in your own values.yaml.
     # Otherwise a mere upgrade of the chart could lead to an unexpected upgrade
     # of weaviate. In accordance with Infra-as-code, you should pin this value
     # down and only change it if you explicitly want to upgrade the Weaviate
     # version.
-    tag: 1.19.1
+    tag: 1.27.27
     repo: semitechnologies/weaviate
     # Image pull policy: https://kubernetes.io/docs/concepts/containers/images/#image-pull-policy
     pullPolicy: IfNotPresent
@@ -741,14 +761,14 @@ weaviate:
   # example setting the nofile limit
   command: ["/bin/weaviate"]
   args:
-    - "--host"
-    - "0.0.0.0"
-    - "--port"
-    - "8080"
-    - "--scheme"
-    - "http"
-    - "--config-file"
-    - "/weaviate-config/conf.yaml"
+    - '--host'
+    - '0.0.0.0'
+    - '--port'
+    - '8080'
+    - '--scheme'
+    - 'http'
+    - '--config-file'
+    - '/weaviate-config/conf.yaml'
     - --read-timeout=60s
     - --write-timeout=60s
 
@@ -769,13 +789,21 @@ weaviate:
   #   https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
   initContainers:
     sysctlInitContainer:
-      enabled: true
+      enabled: false
       sysctlVmMaxMapCount: 524288
       image:
         registry: docker.io
         repo: alpine
         tag: latest
         pullPolicy: IfNotPresent
+    ensureFileOwnershipContainer:
+      # This init container sets the file ownerships of /var/lib/weaviate directory to the ones set in
+      # containerSecurityContext.runAsUser and containerSecurityContext.fsGroup settings to ensure that Weaviate is able
+      # to start in unprivileged configuration.
+      # Enable this init container only if Weaviate was configured previously without security context
+      # and now containerSecurityContext is provided to run Weaviate container with non-root user.
+      # Please be sure to set at least containerSecurityContext.runAsUser and containerSecurityContext.fsGroup.
+      enabled: false
 
     extraInitContainers: {}
     # - image: some-image
@@ -785,8 +813,19 @@ weaviate:
   # to cases where no data is imported yet. Scaling down after importing data may
   # break usability. Full dynamic scalability will be added in a future release.
   replicas: 1
-  resources:
-    {}
+
+  # Define how pods will be created. Possible values: OrderedReady | Parallel
+  # OrderedReady - pods will be created one after another
+  # Parallel - all pods will be created at once
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+    # This setting is only available in K8s v1.24 and higher.
+    # Setting maxUnavailable to 100% results in removing all of the pods
+    # and re-creating them in parallel all at once.
+    # rollingUpdate:
+    #   maxUnavailable: 100%
+  resources: {}
     # requests:
     #   cpu: '500m'
     #   memory: '300Mi'
@@ -1075,6 +1114,7 @@ weaviate:
       #   AZURE_STORAGE_KEY: name-of-the-k8s-secret-containing-account-key
       #   AZURE_STORAGE_CONNECTION_STRING: name-of-the-k8s-secret-containing-connection-string
 
+
   # modules are extensions to Weaviate, they can be used to support various
   # ML-models, but also other features unrelated to model inference.
   # An inference/vectorizer module is not required, you can also run without any
@@ -1091,14 +1131,20 @@ weaviate:
   # values.yaml will be ignored when defining a custom config map.
   custom_config_map:
     enabled: false
-    name: "custom-config"
+    name: 'custom-config'
 
   # Pass any annotations to Weaviate pods
   annotations:
 
+  extraVolumeMounts:
+
+  extraVolumes:
+
   nodeSelector:
 
   tolerations:
+
+  hostAliases:
 
   affinity:
     podAntiAffinity:
@@ -1113,6 +1159,12 @@ weaviate:
                   values:
                     - weaviate
 
+  ## Optionally specify priorityClass name for the pod
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#pod-priority
+  ##
+  priorityClassName: ""
+  globalPriorityClassName: ""
+
 service:
   type: ClusterIP
   port: 80
@@ -1122,7 +1174,7 @@ redis:
 
 ###################################
 # External Redis
-# - these configs are only used when `externalRedis.enabled` is true
+# - these configs applies only if `externalRedis.enabled` is true
 ###################################
 externalRedis:
   enabled: true
@@ -1134,7 +1186,7 @@ externalRedis:
 
 ###################################
 # External Secret (External Secrets Operator)
-# - these configs are used when `externalSecret.enabled` is true
+# - these configs applies only if `externalSecret.enabled` is true
 # - when enabled, the built-in Secret resources will be replaced by ExternalSecret resources
 ###################################
 externalSecret:

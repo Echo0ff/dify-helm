@@ -328,15 +328,6 @@
             }
           }
         },
-        "service": {
-          "type": "object",
-          "properties": {
-            "port": { "type": "integer" },
-            "annotations": { "type": "object" },
-            "labels": { "type": "object" },
-            "clusterIP": { "type": "string" }
-          }
-        },
         "serviceAccount": {
           "type": "object",
           "properties": {
@@ -674,32 +665,27 @@
           }
         },
         "command": { "type": "array" },
-        "args": { "type": "array" },
-        "initContainers": {
+        "args": { "type": "array" }
+      }
+    },
+    "externalPostgres": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "address": { "type": "string" },
+        "port": { "type": "integer" },
+        "database": {
           "type": "object",
           "properties": {
-            "sysctlInitContainer": {
-              "type": "object",
-              "properties": {
-                "enabled": { "type": "boolean" },
-                "sysctlVmMaxMapCount": { "type": "integer" },
-                "image": {
-                  "type": "object",
-                  "properties": {
-                    "registry": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "tag": { "type": "string" },
-                    "pullPolicy": { "type": "string" }
-                  }
-                }
-              }
-            },
-            "extraInitContainers": { "type": "object" }
+            "api": { "type": "string" },
+            "pluginDaemon": { "type": "string" }
           }
         }
       }
     },
-    "externalPostgres": {
+    "externalMysql": {
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
@@ -724,7 +710,26 @@
         "port": { "type": "integer" },
         "username": { "type": "string" },
         "password": { "type": "string" },
-        "useSSL": { "type": "boolean" }
+        "db": { 
+          "type": "object",
+          "properties": {
+            "app": { "type": "integer" },
+            "celery": { "type": "integer" }
+          }
+        },
+        "useSSL": { "type": "boolean" },
+        "sentinel": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "masterSet": { "type": "string" },
+            "sentinels": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "password": { "type": "string" }
+          }
+        }
       }
     },
     "externalS3": {
@@ -735,7 +740,6 @@
         "pathStyle": { "type": "boolean" },
         "accessKey": { "type": "string" },
         "secretKey": { "type": "string" },
-        "useSSL": { "type": "boolean" },
         "bucketName": {
           "type": "object",
           "properties": {
@@ -844,7 +848,13 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
-        "endpoint": { "type": "string" },
+        "endpoint": {
+          "type": "object",
+          "properties": {
+            "http": { "type": "string" },
+            "grpc": { "type": "string" }
+          }
+        },
         "apiKey": { "type": "string" }
       }
     },
