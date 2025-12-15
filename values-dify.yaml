@@ -19,7 +19,7 @@
 image:
   api:
     repository: langgenius/dify-api
-    tag: "1.8.1"
+    tag: "1.10.1-fix.1"
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -30,7 +30,7 @@ image:
 
   web:
     repository: langgenius/dify-web
-    tag: "1.8.1"
+    tag: "1.10.1-fix.1"
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -74,7 +74,7 @@ image:
 
   pluginDaemon:
     repository: langgenius/dify-plugin-daemon
-    tag: 0.2.0-local
+    tag: 0.4.1-local
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -3292,7 +3292,9 @@ externalRedis:
 ###################################
 externalWeaviate:
   enabled: false
-  endpoint: "http://weaviate:8080"
+  endpoint:
+    http: "http://weaviate:8080"
+    grpc: "grpc://weaviate:50051"
   apiKey: "PLEASE_SET_IN_values-secrets.yaml"  # 请在 values-secrets.yaml 中设置
 
 ###################################
