@@ -225,13 +225,13 @@ api:
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
-      value: "true"
+      value: "false"
     # Number of days to retain workflow run logs (default: 30 days)
     - name: WORKFLOW_LOG_RETENTION_DAYS
       value: "4"
     # Batch size for workflow log cleanup operations (default: 100)
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
-      value: "200"
+      value: "50"
 
 ###################################
 # Worker 服务优化（异步任务处理 - 主要处理知识库索引）
@@ -337,13 +337,13 @@ worker:
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
-      value: "true"
+      value: "false"
     # Number of days to retain workflow run logs (default: 30 days)
     - name: WORKFLOW_LOG_RETENTION_DAYS
-      value: "7"
+      value: "4"
     # Batch size for workflow log cleanup operations (default: 100)
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
-      value: "200"
+      value: "50"
     
     - name: CODE_MAX_NUMBER
       value: "9223372036854775807"
@@ -411,13 +411,13 @@ beat:
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
-      value: "true"
+      value: "false"
     # Number of days to retain workflow run logs (default: 30 days)
     - name: WORKFLOW_LOG_RETENTION_DAYS
-      value: "7"
+      value: "4"
     # Batch size for workflow log cleanup operations (default: 100)
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
-      value: "200"
+      value: "50"
     - name: CODE_MAX_NUMBER
       value: "9223372036854775807"
     - name: CODE_MIN_NUMBER
@@ -492,7 +492,7 @@ web:
 ###################################
 sandbox:
   enabled: true
-  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  replicas: 5                   # 3 个副本（3节点HA，每节点1个，提高可用性）
   
   resources:
     requests:
@@ -504,9 +504,9 @@ sandbox:
   
   autoscaling:
     enabled: true
-    minReplicas: 3              # 最少 3 个（3节点HA，每节点1个）
-    maxReplicas: 6              # 最多 6 个（扩容时每节点2个）
-    targetCPUUtilizationPercentage: 70
+    minReplicas: 5              # 最少 3 个（3节点HA，每节点1个）
+    maxReplicas: 8              # 最多 6 个（扩容时每节点2个）
+    targetCPUUtilizationPercentage: 60
   
   updateStrategy:
     type: RollingUpdate
@@ -677,13 +677,13 @@ pluginDaemon:
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
-      value: "true"
+      value: "false"
     # Number of days to retain workflow run logs (default: 30 days)
     - name: WORKFLOW_LOG_RETENTION_DAYS
-      value: "7"
+      value: "4"
     # Batch size for workflow log cleanup operations (default: 100)
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
-      value: "200"
+      value: "50"
 
 ###################################
 # Service 配置
