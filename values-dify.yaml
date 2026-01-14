@@ -1323,11 +1323,9 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-body-size: 15m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-    # 修复 Next.js Server Actions 的 headers 问题
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      proxy_set_header X-Forwarded-Host $host;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_set_header X-Forwarded-Port $server_port;
+    # ⚠️ 注意：configuration-snippet 在 nginx-ingress v1.9.0+ 默认被视为 risky
+    # 如需使用，需要在 ingress-nginx configmap 中添加更多安全配置
+    # 参考：https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/#allow-snippet-annotations
     # kubernetes.io/tls-acme: "true"
     # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   hosts:

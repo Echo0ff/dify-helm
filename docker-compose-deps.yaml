@@ -1,6 +1,12 @@
 # ==================================================================
 # Dify 外部依赖服务 Docker Compose
-# 用于本地开发测试，生产环境请使用阿里云托管服务
+# 用于小集群部署（4C8G 节点）
+# ==================================================================
+# 资源预算（单节点 4C8G）：
+#   - Milvus: ~1.5C / 3G
+#   - etcd: ~0.2C / 256M
+#   - MinIO: ~0.3C / 512M
+#   - 总计: ~2C / 4G（留一半给系统和其他服务）
 # ==================================================================
 
 version: '3.8'
@@ -21,11 +27,20 @@ services:
     command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 5
     networks:
       - dify-deps
+    # ⚠️ 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   # Milvus 依赖 - MinIO（用于 Milvus 内部存储）
   milvus-minio:
@@ -40,13 +55,22 @@ services:
     command: minio server /minio_data --console-address ":9091"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 5
     networks:
       - dify-deps
+    # ⚠️ 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
-  # Milvus 向量数据库
+  # Milvus 向量数据库（Standalone 模式）
   milvus:
     image: milvusdb/milvus:v2.5.15
     container_name: dify-milvus
@@ -56,24 +80,37 @@ services:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: milvus-minio:9000
       common.security.authorizationEnabled: "true"
+      # ⚠️ 内存优化配置（适配小内存节点）
+      # 查询节点内存缓存限制
+      queryNode.cache.memoryLimit: 1gb
+      # 索引节点内存限制
+      indexNode.scheduler.buildParallel: 1
     volumes:
       - ./volumes/milvus/data:/var/lib/milvus
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "19530:19530"      # gRPC 端口
+      - "9091:9091"        # 健康检查端口
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 10s
-      start_period: 90s
-      timeout: 5s
+      interval: 30s
+      start_period: 120s   # 增加启动等待时间
+      timeout: 10s
       retries: 5
     depends_on:
       - etcd
       - milvus-minio
     networks:
       - dify-deps
+    # ⚠️ 资源限制（核心配置）
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'       # 最多使用 2 核
+          memory: 3G        # 最多使用 3G 内存
+        reservations:
+          cpus: '1.0'       # 预留 1 核
+          memory: 2G        # 预留 2G 内存
 
 networks:
   dify-deps:
     driver: bridge
-
