@@ -62,7 +62,7 @@ api:
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 3        # 降低：原 4 → 3（资源有限）
+    maxReplicas: 4        # 降低：原 4 → 3（资源有限）
     targetCPUUtilizationPercentage: 80   # 提高阈值，减少扩容频率
     targetMemoryUtilizationPercentage: 80
   
@@ -211,7 +211,7 @@ api:
 ###################################
 worker:
   enabled: true
-  replicas: 1
+  replicas: 2
   
   # ⚠️ 资源配置：降低以适应小集群
   resources:
@@ -224,8 +224,8 @@ worker:
   
   autoscaling:
     enabled: true
-    minReplicas: 1
-    maxReplicas: 2
+    minReplicas: 2
+    maxReplicas: 3
     targetCPUUtilizationPercentage: 80
     targetMemoryUtilizationPercentage: 85
   
@@ -263,11 +263,11 @@ worker:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # ⚠️ Worker 数据库连接池：小集群降低
+    # ⚠️ Worker 数据库连接池：知识库索引需要更多连接
     - name: SQLALCHEMY_POOL_SIZE
-      value: "5"          # 降低：原 40 → 5
+      value: "10"         # 提高：5 → 20（知识库索引需要）
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "3"          # 降低：原 20 → 3
+      value: "5"         # 提高：3 → 10
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"
     - name: SQLALCHEMY_POOL_PRE_PING
@@ -405,11 +405,11 @@ web:
   # ⚠️ 资源配置：降低
   resources:
     requests:
-      cpu: "100m"         # 降低：原 500m → 100m
-      memory: "128Mi"     # 降低：原 512Mi → 128Mi
+      cpu: "500m"         # 降低：原 500m → 100m
+      memory: "512Mi"     # 降低：原 512Mi → 512Mi
     limits:
-      cpu: "500m"         # 降低：原 1000m → 500m
-      memory: "512Mi"     # 降低：原 1Gi → 512Mi
+      cpu: "2000m"         # 降低：原 1000m → 1000m
+      memory: "1Gi"     # 降低：原 1Gi → 1Gi
   
   autoscaling:
     enabled: false        # 小集群关闭 HPA，节省资源
@@ -444,21 +444,21 @@ web:
 ###################################
 sandbox:
   enabled: true
-  replicas: 1             # ⚠️ 降低：原 2 → 1（节省资源）
+  replicas: 2             # ⚠️ 降低：原 2 → 1（节省资源）
   
   # ⚠️ 资源配置：大幅降低
   resources:
     requests:
-      cpu: "200m"         # 降低：原 1000m → 200m
-      memory: "256Mi"     # 降低：原 2Gi → 256Mi
+      cpu: "1000m"         # 降低：原 1000m → 200m
+      memory: "512Mi"     # 降低：原 2Gi → 512Mi
     limits:
-      cpu: "500m"         # 降低：原 2000m → 500m
-      memory: "1Gi"     # 降低：原 4Gi → 1Gi
+      cpu: "3000m"         # 降低：原 2000m → 3000m
+      memory: "2Gi"     # 降低：原 4Gi → 512Mi
   
   autoscaling:
     enabled: true
-    minReplicas: 1        # 降低：原 2 → 1
-    maxReplicas: 2        # 降低：原 3 → 2
+    minReplicas: 2        # 降低：原 2 → 1
+    maxReplicas: 3        # 降低：原 3 → 2
     targetCPUUtilizationPercentage: 70
   
   updateStrategy:
@@ -562,26 +562,31 @@ ssrfProxy:
 ###################################
 pluginDaemon:
   enabled: true
-  replicas: 1
+  replicas: 2             # 提高：1 → 2（支持零停机更新 + 分担负载）
   
-  # ⚠️ 资源配置：大幅降低（原配置过高）
+  # ⚠️ 资源配置：提高 CPU 限制解决限流问题
+  # 问题：CPU limit 1核导致限流(throttling)，LLM调用从4-7秒变成9-12秒
+  # 原因：plugin-daemon 运行 15+ 个 Python 插件进程，需要更多 CPU
   resources:
     requests:
-      cpu: "500m"         # 降低：原 2000m → 500m
-      memory: "1Gi"       # 降低：原 4Gi → 1Gi
+      cpu: "1000m"        # 提高：500m → 1000m
+      memory: "2Gi"       # 提高：1Gi → 2Gi
     limits:
-      cpu: "1000m"        # 降低：原 4000m → 1000m
-      memory: "4Gi"       # 降低：原 6Gi → 4Gi
+      cpu: "3000m"        # 提高：1000m → 2000m（关键！解决CPU限流）
+      memory: "4Gi"       # 保持不变
   
-  # 延迟接入流量配置
+  # 延迟接入流量配置（解决启动时编译问题）
+  # 问题：plugin-daemon 启动需要 5-8 分钟编译插件，期间不应接收请求
+  # 方案：使用 HTTP 健康检查 + 足够长的延迟，确保编译完成后才接入流量
   customReadinessProbe:
-    tcpSocket:
+    httpGet:
+      path: /health/check    # 使用 HTTP 健康检查而非 TCP
       port: 5002
-    initialDelaySeconds: 240
-    periodSeconds: 10
+    initialDelaySeconds: 420  # 7分钟：确保插件编译完成（原 240 秒不够）
+    periodSeconds: 10         # 每 10 秒检查一次
     timeoutSeconds: 5
-    failureThreshold: 30
-    successThreshold: 1
+    failureThreshold: 30      # 允许失败 30 次（5 分钟容错）
+    successThreshold: 1       # 成功 1 次即可
   
   updateStrategy:
     type: RollingUpdate
