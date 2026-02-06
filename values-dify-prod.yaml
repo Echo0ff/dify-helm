@@ -238,6 +238,8 @@ api:
       value: "10"  # 最大并行数
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"  # 降低扩容阈值，更快触发并行
+    - name: UPLOAD_IMAGE_FILE_SIZE_LIMIT
+      value: "100"  # 单位是 MB，
 
 ###################################
 # Worker 服务优化（异步任务处理 - 主要处理知识库索引）
@@ -485,6 +487,8 @@ web:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
+    - name: MAX_PARALLEL_LIMIT
+      value: 50
   
   affinity:
     podAntiAffinity:
