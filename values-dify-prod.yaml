@@ -29,7 +29,7 @@
 ###################################
 api:
   enabled: true
-  # 初始副本数：6 个（增加API处理能力，主要处理工作流/对话流）
+  # 初始副本数：9 个（增加API处理能力，主要处理工作流/对话流）
   replicas: 9
   
   # ⚠️ 外部访问URL配置（解决工作流发布URL问题）
@@ -40,14 +40,16 @@ api:
     appWeb: "http://47.97.245.112"
     files: "http://47.97.245.112"
   
-  # 资源配置：提高单Pod资源，减少超时错误
+  # 资源配置（基于实测：CPU ~250m，MEM ~1.3Gi）
+  # 策略：requests 按实际 2 倍预留，limits 保持不变给突发空间
+  # 降低 requests 的目的：释放调度空间，让 HPA 能扩出更多 Pod
   resources:
     requests:
-      cpu: "2000m"      # 提高到 2 核（确保充足处理能力）
-      memory: "4Gi"     # 提高到 4G（避免内存压力）
+      cpu: "1000m"       # 2000m→1000m（实测250m，4倍预留）
+      memory: "2Gi"     # 4Gi→2Gi（实测1.3Gi，1.5倍预留）
     limits:
-      cpu: "6000m"      # 最多 6 核
-      memory: "6Gi"     # 最多 6G（给予充足上限）
+      cpu: "4000m"      # 6000m→4000m（突发上限，仍有余量）
+      memory: "4Gi"     # 6Gi→4Gi（实测最高1.7Gi，充足上限）
 
   # 自定义 prompts
   persistence:
@@ -65,10 +67,10 @@ api:
   # 启用水平自动伸缩（HPA）- 针对对话流优化
   autoscaling:
     enabled: true
-    minReplicas: 9            # 提高最小副本数（优先保证API能力）
-    maxReplicas: 12           # 最多 10 个（充分利用集群资源）
-    targetCPUUtilizationPercentage: 60    # 60% 扩容（更早响应负载）
-    targetMemoryUtilizationPercentage: 65 # 65% 扩容（避免内存瓶颈）
+    minReplicas: 9            # 9→9（实测12个Pod才用12%CPU，9个足够日常）
+    maxReplicas: 15           # 12→20（10倍流量需要约20-25个Pod的扩容空间）
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
   
   # 优化健康检查 - 更宽容的配置，减少状态错误
   livenessProbe:
@@ -248,13 +250,15 @@ worker:
   enabled: true
   replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
   
+  # 资源配置（基于实测：CPU ~3m，MEM ~370Mi）
+  # Worker 当前非常空闲，但知识库索引时会突发
   resources:
     requests:
-      cpu: "1000m"              # 请求 1 核
-      memory: "2Gi"             # 请求 2G
+      cpu: "500m"               # 1000m→500m（日常极低，4倍预留）
+      memory: "1Gi"             # 2Gi→1Gi（4倍预留）
     limits:
-      cpu: "4000m"              # 最多 4 核（处理密集知识库任务时使用）
-      memory: "4Gi"             # 最多 4G
+      cpu: "2000m"              # 保持（知识库索引时CPU突发高）
+      memory: "4Gi"             # 保持（处理大文件时需要）
   
   autoscaling:
     enabled: true
@@ -389,13 +393,14 @@ beat:
   enabled: true
   # Beat 只需要 1 个副本（多个会重复执行定时任务）
   
+  # 资源配置（基于实测：CPU ~0m，MEM 281Mi — 注意已超过原request 256Mi）
   resources:
     requests:
       cpu: "200m"
       memory: "256Mi"
     limits:
       cpu: "500m"
-      memory: "512Mi"
+      memory: "768Mi"           # 512Mi→768Mi（给更多余量）
   
   updateStrategy:
     type: Recreate             # Beat 使用 Recreate 策略（避免多实例）
@@ -488,7 +493,7 @@ web:
     - name: LOG_TZ
       value: "Asia/Shanghai"
     - name: MAX_PARALLEL_LIMIT
-      value: 50
+      value: "50"
   
   affinity:
     podAntiAffinity:
@@ -512,11 +517,11 @@ sandbox:
   
   resources:
     requests:
-      cpu: "2000m"
-      memory: "2Gi"
+      cpu: "1000m"               # 2000m→500m（实测130m，4倍预留）
+      memory: "2Gi"             # 保持（部分Pod接近2Gi）
     limits:
-      cpu: "4000m"
-      memory: "4Gi"
+      cpu: "4000m"              # 保持（代码执行突发高）
+      memory: "6Gi"             # 保持（已有Pod用到3Gi）
   
   autoscaling:
     enabled: true
@@ -628,26 +633,47 @@ pluginDaemon:
   enabled: true
   replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
   
+  # 资源配置（基于实测：CPU ~350m，MEM ~11Gi — 143个插件进程）
+  # ⚠️ 内存由插件数量决定，非流量驱动。10倍流量不会增加内存，但当前已接近上限。
+  # 强烈建议清理重复版本插件以降低内存（可释放3-4Gi）
   resources:
     requests:
-      cpu: "2000m"
-      memory: "8Gi"
+      cpu: "1000m"               # 2000m→500m（实测350m）
+      memory: "12Gi"            # 实测11Gi，必须给够
     limits:
-      cpu: "6000m"
-      memory: "12Gi"
+      cpu: "4000m"              # 6000m→4000m
+      memory: "16Gi"            # 给充足余量，防止插件增多后OOM
   
-  # ⚠️ 延迟接入流量配置：使用 tcpSocket 检查端口监听
-  # 由于 plugin-daemon 没有 /health 端点，使用 tcpSocket 检查 5002 端口是否监听
-  # initialDelaySeconds: 180 秒（3 分钟）是插件编译的合理等待时间
-  # 配合较高的 failureThreshold，即使编译时间较长也能容错
+  # ========= 探针策略 =========
+  # 实测数据（143个插件）：Pod 启动到 Ready 约 242 秒
+  # 问题：tcpSocket 只检查端口是否监听，端口在编译完成前就已开放，
+  #       必须用 initialDelaySeconds 作为时间安全阀。
+  # 方案：startupProbe（编译等待）+ readinessProbe（运行时健康检查）分离
+  #   - startupProbe 期间：readinessProbe 不运行，Pod 不接收流量
+  #   - startupProbe 通过后：readinessProbe 接管，快速检测运行时故障
+  #   - 滚动更新时：旧 Pod 在整个 startupProbe 期间保持服务
+  #
+  # ⚠️ 如果后续插件增多导致编译变慢，调大 initialDelaySeconds（当前 300 秒）
+
+  # startupProbe：等待插件编译完成（此期间 Pod 不接收流量）
+  customStartupProbe:
+    tcpSocket:
+      port: 5002
+    initialDelaySeconds: 360    # 6分钟后开始探测（实测编译<4分钟，留25%余量）
+    periodSeconds: 10           # 之后每10秒探测
+    timeoutSeconds: 5
+    failureThreshold: 20        # 再允许30次失败（总窗口: 360+200=560秒=11分钟）
+    successThreshold: 1
+
+  # readinessProbe：编译完成后的持续健康检查（startupProbe 通过后才启用）
   customReadinessProbe:
     tcpSocket:
       port: 5002
-    initialDelaySeconds: 240    # 4 分钟后开始检查（平衡速度和稳定性）
-    periodSeconds: 10           # 每 10 秒检查一次
-    timeoutSeconds: 5           # 5 秒超时
-    failureThreshold: 30        # ⚠️ 允许 30 次失败（30×10秒=5分钟额外容错时间）
-    successThreshold: 1         # 1 次成功即标记为就绪
+    initialDelaySeconds: 5      # startupProbe 已确认启动完成，几乎不用等
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3         # 3次失败即从 Endpoints 摘除（30秒内快速检测故障）
+    successThreshold: 1
   
   updateStrategy:
     type: RollingUpdate
@@ -700,6 +726,8 @@ pluginDaemon:
     # Batch size for workflow log cleanup operations (default: 100)
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
       value: "50"
+    - name: FORCE_VERIFYING_SIGNATURE
+      value: "false"
 
 ###################################
 # Service 配置
@@ -723,7 +751,19 @@ nodeSelector: {}
 ###################################
 # 全局容忍度
 ###################################
-tolerations: []
+# ⚠️ 关键 HA 优化：缩短节点故障时的 Pod 驱逐时间
+# 默认 tolerationSeconds=300（5分钟），节点宕机后 Pod 要 5 分钟才从 Endpoints 摘除。
+# 改为 30 秒后，节点宕机 → 40秒检测 + 30秒容忍 = 约 70 秒即驱逐（原来需要 340 秒）。
+# 这比改 k3s 配置更安全：只影响 Dify 的 Pod，不影响系统组件，无需重启 k3s。
+tolerations:
+  - key: "node.kubernetes.io/not-ready"
+    operator: "Exists"
+    effect: "NoExecute"
+    tolerationSeconds: 30       # 默认300→30，节点 NotReady 后 30秒驱逐
+  - key: "node.kubernetes.io/unreachable"
+    operator: "Exists"
+    effect: "NoExecute"
+    tolerationSeconds: 30       # 默认300→30，节点 Unreachable 后 30秒驱逐
 
 ###################################
 # 全局亲和性
