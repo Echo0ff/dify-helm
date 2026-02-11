@@ -157,7 +157,7 @@ api:
     - name: CODE_MAX_PRECISION
       value: "20"
     - name: CODE_MAX_STRING_LENGTH
-      value: "80000"
+      value: "400000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
       value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
@@ -242,6 +242,11 @@ api:
       value: "1"  # 降低扩容阈值，更快触发并行
     - name: UPLOAD_IMAGE_FILE_SIZE_LIMIT
       value: "100"  # 单位是 MB，
+    # 最大二进制文件大小100MB,文字大小10MB
+    - name: HTTP_REQUEST_NODE_MAX_BINARY_SIZE
+      value: "104857600"
+    - name: HTTP_REQUEST_NODE_MAX_TEXT_SIZE
+      value: "10485760"
 
 ###################################
 # Worker 服务优化（异步任务处理 - 主要处理知识库索引）
@@ -366,7 +371,7 @@ worker:
     - name: CODE_MAX_PRECISION
       value: "20"
     - name: CODE_MAX_STRING_LENGTH
-      value: "80000"
+      value: "400000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
       value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
@@ -446,7 +451,7 @@ beat:
     - name: CODE_MAX_PRECISION
       value: "20"
     - name: CODE_MAX_STRING_LENGTH
-      value: "80000"
+      value: "400000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
       value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
