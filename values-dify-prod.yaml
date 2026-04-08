@@ -157,7 +157,7 @@ api:
     - name: CODE_MAX_PRECISION
       value: "20"
     - name: CODE_MAX_STRING_LENGTH
-      value: "400000"
+      value: "4000000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
       value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
@@ -181,28 +181,28 @@ api:
       value: "50"               # ⚠️ 从100降到60，减少并发压力（9×2×60=1080协程）
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池优化（🔴 紧急修复：连接数打满 1600/1600）
-    # 问题：之前配置导致连接数超限（9×115=1035 + Worker 180 + 其他 = 1300+）
-    # 修复：大幅降低连接池，防止耗尽数据库连接
-    # 新配置：9 Pod × 40 = 360（API）+ Worker 180 + 其他 105 = 645 连接（安全余量 60%）
+    # 数据库连接池优化
+    # RDS idle_in_transaction_session_timeout 已改为 15min（2026-02-25）
+    # 连接数预算：每 Pod 2 worker × (60+30) = 180 连接
+    # 总量：10 Pod × 180 = 1800（API）+ Worker 480 + 其他 105 = 2385（上限 3200，余量 34%）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "50"               # 🔴 紧急降低（从 90 → 25）
+      value: "60"               # 每 worker 进程 60 个常驻连接
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "20"               # 保持25（峰值 115/Pod）
+      value: "30"               # 溢出 30 个（合计 90/worker，峰值 180/Pod）
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "270"              # ⚠️ 240秒回收（数据库超时300秒，留20%安全边界）
+      value: "3600"             # 官方默认 1 小时，配合 PRE_PING 检测失效连接
     - name: SQLALCHEMY_POOL_PRE_PING
-      value: "true"             # 连接前检查有效性
+      value: "true"             # checkout 时检查连接有效性
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "120"              # 等待超时 120 秒（给予更多容错时间）
+      value: "30"               # 30 秒等不到连接就快速失败（原 120 秒太久）
     - name: SQLALCHEMY_ECHO
-      value: "false"            # 关闭 SQL 日志
+      value: "false"
     - name: SQLALCHEMY_ECHO_POOL
-      value: "false"            # 关闭连接池日志  
+      value: "false"
     - name: SQLALCHEMY_POOL_RESET_ON_RETURN
-      value: "rollback"         # ⚠️ 核心：归还连接时自动回滚未提交事务
+      value: "rollback"         # 归还连接时自动回滚未提交事务
     - name: SQLALCHEMY_POOL_USE_LIFO
-      value: "true"             # LIFO模式：优先使用最近的连接，提高缓存命中率
+      value: "false"            # FIFO 模式：所有连接轮流使用，让 POOL_RECYCLE 有效淘汰旧连接
     # Redis 连接池优化（增加连接池避免超时）
     - name: REDIS_POOL_SIZE
       value: "40"               # 每个 Pod 40 个连接（8-12 Pod = 320-480 连接）
@@ -235,9 +235,9 @@ api:
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
       value: "50"
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "5"  # 增加初始并行 worker 数
+      value: "3"  # 增加初始并行 worker 数
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "10"  # 最大并行数
+      value: "5"  # 最大并行数
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"  # 降低扩容阈值，更快触发并行
     - name: UPLOAD_IMAGE_FILE_SIZE_LIMIT
@@ -331,15 +331,15 @@ worker:
     - name: SQLALCHEMY_MAX_OVERFLOW
       value: "20"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "270"              # 240秒回收连接（数据库超时300秒，留20%安全边界）
+      value: "3600"
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "120"
+      value: "30"               # 30 秒快速失败
     - name: SQLALCHEMY_POOL_RESET_ON_RETURN
-      value: "rollback"         # 归还连接时自动回滚未提交事务
+      value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
-      value: "true"             # LIFO模式
+      value: "false"            # FIFO 模式
     # Celery Worker 优化（使用正确的 Dify 环境变量名）
     - name: CELERY_AUTO_SCALE
       value: "true"             # 启用自动伸缩
@@ -371,7 +371,7 @@ worker:
     - name: CODE_MAX_PRECISION
       value: "20"
     - name: CODE_MAX_STRING_LENGTH
-      value: "400000"
+      value: "4000000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
       value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
@@ -385,9 +385,9 @@ worker:
     - name: CODE_EXECUTION_WRITE_TIMEOUT
       value: "10"
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "5"  # 增加初始并行 worker 数
+      value: "3"  # 增加初始并行 worker 数
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "10"  # 最大并行数
+      value: "5"  # 最大并行数
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"  # 降低扩容阈值，更快触发并行
 
@@ -423,15 +423,15 @@ beat:
     - name: SQLALCHEMY_MAX_OVERFLOW
       value: "5"
     - name: SQLALCHEMY_POOL_RECYCLE
-      value: "270"              # 240秒回收连接（数据库超时300秒）
+      value: "3600"
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "120"
+      value: "30"
     - name: SQLALCHEMY_POOL_RESET_ON_RETURN
       value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
-      value: "true"
+      value: "false"
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
@@ -451,7 +451,7 @@ beat:
     - name: CODE_MAX_PRECISION
       value: "20"
     - name: CODE_MAX_STRING_LENGTH
-      value: "400000"
+      value: "4000000"
     - name: CODE_MAX_STRING_ARRAY_LENGTH
       value: "70"
     - name: CODE_MAX_OBJECT_ARRAY_LENGTH
@@ -499,6 +499,8 @@ web:
       value: "Asia/Shanghai"
     - name: MAX_PARALLEL_LIMIT
       value: "50"
+    - name: TOP_K_MAX_VALUE
+      value: "20"
   
   affinity:
     podAntiAffinity:
