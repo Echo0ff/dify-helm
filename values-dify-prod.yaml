@@ -68,7 +68,7 @@ api:
   autoscaling:
     enabled: true
     minReplicas: 9            # 9→9（实测12个Pod才用12%CPU，9个足够日常）
-    maxReplicas: 15           # 12→20（10倍流量需要约20-25个Pod的扩容空间）
+    maxReplicas: 18          # 12→20（10倍流量需要约20-25个Pod的扩容空间）
     targetCPUUtilizationPercentage: 60
     targetMemoryUtilizationPercentage: 70
   
