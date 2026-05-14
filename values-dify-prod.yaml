@@ -6,7 +6,7 @@
 # - 需要预留资源给 Milvus 向量数据库
 # - 配合 values-secrets.yaml 使用
 #
-# 集群配置（3节点小集群）: 
+# 集群配置（3节点小集群）:
 #   - Node 1-3: 4C/8G (standard)
 #   - 其中一个节点部署 Milvus（预留 ~2C/4G）
 #
@@ -30,12 +30,12 @@ api:
   enabled: true
   # 小集群：2 个副本足够
   replicas: 2
-  
+
   # 外部访问URL配置
   url:
     appWeb: "http://3.19.168.125"
     files: "http://3.19.168.125"
-  
+
   # ⚠️ 资源配置：大幅降低以适应小集群
   resources:
     requests:
@@ -57,7 +57,7 @@ api:
         mountPath: /app/api/core/llm_generator/prompts.py
         subPath: prompts.py
         readOnly: true
-  
+
   # HPA：小集群保守配置
   autoscaling:
     enabled: true
@@ -65,7 +65,7 @@ api:
     maxReplicas: 4        # 降低：原 4 → 3（资源有限）
     targetCPUUtilizationPercentage: 80   # 提高阈值，减少扩容频率
     targetMemoryUtilizationPercentage: 80
-  
+
   # 健康检查
   livenessProbe:
     enabled: true
@@ -74,7 +74,7 @@ api:
     timeoutSeconds: 20
     failureThreshold: 12
     successThreshold: 1
-  
+
   readinessProbe:
     enabled: true
     initialDelaySeconds: 20
@@ -82,14 +82,14 @@ api:
     timeoutSeconds: 20
     failureThreshold: 8
     successThreshold: 1
-  
+
   # 滚动更新策略
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1         # 降低：原 3 → 1（资源有限）
       maxUnavailable: 0
-  
+
   # Pod 拓扑分散：小集群更需要均匀分布
   topologySpreadConstraints:
     - maxSkew: 1          # 严格均匀分布
@@ -98,7 +98,7 @@ api:
       labelSelector:
         matchLabels:
           component: api
-  
+
   # 亲和性：小集群简化配置
   affinity:
     podAntiAffinity:
@@ -112,9 +112,9 @@ api:
                   values:
                     - api
             topologyKey: kubernetes.io/hostname
-  
+
   logLevel: INFO
-  
+
   extraEnv:
     - name: TZ
       value: "Asia/Shanghai"
@@ -153,17 +153,17 @@ api:
       value: "30"         # 降低：原 50 → 30（减少内存压力）
     - name: GUNICORN_TIMEOUT
       value: "360"
-    # ⚠️ 数据库连接池：小集群大幅降低
+    # ⚠️ 数据库连接池：需覆盖 graph engine 并发（每 worker 最多 5 个 GraphWorker + 请求自身）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "10"         # 降低：原 50 → 10
+      value: "20"         # 提高：10 → 20（匹配 graph engine 并发需求）
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "5"          # 降低：原 20 → 5
+      value: "10"         # 提高：5 → 10（应对突发并发）
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "180"
+      value: "30"         # 降低：180 → 30（快速失败，避免大量协程堆积等待）
     - name: SQLALCHEMY_ECHO
       value: "false"
     - name: SQLALCHEMY_ECHO_POOL
@@ -200,41 +200,41 @@ api:
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
       value: "50"
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "5"  # 增加初始并行 worker 数
+      value: "3"  # 降低：5 → 3（减少空闲连接占用）
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "10"  # 最大并行数
+      value: "5"  # 降低：10 → 5（避免连接池耗尽，每 worker 池 30 可覆盖）
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
-      value: "1"  # 降低扩容阈值，更快触发并行
+      value: "1"
 
 ###################################
 # Worker 服务优化
 ###################################
 worker:
   enabled: true
-  replicas: 2
-  
+  replicas: 1
+
   # ⚠️ 资源配置：降低以适应小集群
   resources:
     requests:
-      cpu: "300m"         # 降低：原 1000m → 300m
-      memory: "512Mi"     # 降低：原 2Gi → 512Mi
+      cpu: "1000m"
+      memory: "3Gi"
     limits:
-      cpu: "800m"         # 降低：原 2000m → 800m
-      memory: "1Gi"       # 降低：原 4Gi → 1Gi
-  
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 3
-    targetCPUUtilizationPercentage: 80
-    targetMemoryUtilizationPercentage: 85
-  
+      cpu: "2000m"
+      memory: "5Gi"
+
+  # autoscaling:
+  #   enabled: true
+  #   minReplicas: 2
+  #   maxReplicas: 3
+  #   targetCPUUtilizationPercentage: 80
+  #   targetMemoryUtilizationPercentage: 85
+
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
-  
+
   topologySpreadConstraints:
     - maxSkew: 1
       topologyKey: kubernetes.io/hostname
@@ -242,7 +242,7 @@ worker:
       labelSelector:
         matchLabels:
           component: worker
-  
+
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
@@ -255,9 +255,9 @@ worker:
                   values:
                     - worker
             topologyKey: kubernetes.io/hostname
-  
+
   logLevel: INFO
-  
+
   extraEnv:
     - name: TZ
       value: "Asia/Shanghai"
@@ -280,11 +280,11 @@ worker:
       value: "true"
     # Celery Worker：小集群降低并发
     - name: CELERY_AUTO_SCALE
-      value: "true"
+      value: "false"
     - name: CELERY_MAX_WORKERS
-      value: "2"          # 降低：原 4 → 2
+      value: "1"
     - name: CELERY_MIN_WORKERS
-      value: "1"          # 降低：原 2 → 1
+      value: "1"
     - name: CELERY_WORKER_CLASS
       value: "gevent"
     - name: MAX_TASK_PRE_CHILD
@@ -319,18 +319,18 @@ worker:
     - name: CODE_EXECUTION_WRITE_TIMEOUT
       value: "10"
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "5"  # 增加初始并行 worker 数
+      value: "3"  # 与 API 保持一致
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "10"  # 最大并行数
+      value: "5"  # 与 API 保持一致
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
-      value: "1"  # 降低扩容阈值，更快触发并行
+      value: "1"
 
 ###################################
 # Beat 服务（定时任务调度器）
 ###################################
 beat:
   enabled: true
-  
+
   # ⚠️ 资源配置：修复OOMKilled问题
   resources:
     requests:
@@ -339,12 +339,12 @@ beat:
     limits:
       cpu: "500m"         # 提高：原 300m → 500m
       memory: "512Mi"     # 提高：原 256Mi → 512Mi（修复OOMKilled）
-  
+
   updateStrategy:
     type: Recreate
-  
+
   logLevel: INFO
-  
+
   extraEnv:
     - name: TZ
       value: "Asia/Shanghai"
@@ -401,7 +401,7 @@ beat:
 web:
   enabled: true
   replicas: 1
-  
+
   # ⚠️ 资源配置：降低
   resources:
     requests:
@@ -410,10 +410,10 @@ web:
     limits:
       cpu: "2000m"         # 降低：原 1000m → 1000m
       memory: "1Gi"     # 降低：原 1Gi → 1Gi
-  
+
   autoscaling:
     enabled: false        # 小集群关闭 HPA，节省资源
-  
+
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
@@ -425,7 +425,7 @@ web:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-  
+
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
@@ -445,7 +445,7 @@ web:
 sandbox:
   enabled: true
   replicas: 2             # ⚠️ 降低：原 2 → 1（节省资源）
-  
+
   # ⚠️ 资源配置：大幅降低
   resources:
     requests:
@@ -454,19 +454,19 @@ sandbox:
     limits:
       cpu: "3000m"         # 降低：原 2000m → 3000m
       memory: "2Gi"     # 降低：原 4Gi → 512Mi
-  
+
   autoscaling:
     enabled: true
     minReplicas: 2        # 降低：原 2 → 1
     maxReplicas: 3        # 降低：原 3 → 2
     targetCPUUtilizationPercentage: 70
-  
+
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
-  
+
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
@@ -479,7 +479,7 @@ sandbox:
                   values:
                     - sandbox
             topologyKey: kubernetes.io/hostname
-  
+
   extraEnv:
     - name: TZ
       value: "Asia/Shanghai"
@@ -492,7 +492,7 @@ sandbox:
 proxy:
   enabled: true
   replicas: 1
-  
+
   # ⚠️ 资源配置：降低
   resources:
     requests:
@@ -501,13 +501,13 @@ proxy:
     limits:
       cpu: "300m"         # 降低：原 1000m → 300m
       memory: "256Mi"     # 降低：原 512Mi → 256Mi
-  
+
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
-  
+
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
@@ -520,7 +520,7 @@ proxy:
                   values:
                     - proxy
             topologyKey: kubernetes.io/hostname
-  
+
   clientMaxBodySize: "100m"
 
   extraEnv:
@@ -535,7 +535,7 @@ proxy:
 ssrfProxy:
   enabled: true
   replicas: 1
-  
+
   # ⚠️ 资源配置：降低
   resources:
     requests:
@@ -544,7 +544,7 @@ ssrfProxy:
     limits:
       cpu: "300m"         # 降低：原 1000m → 300m
       memory: "1Gi"     # 降低：原 2Gi → 1Gi
-  
+
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
@@ -563,7 +563,7 @@ ssrfProxy:
 pluginDaemon:
   enabled: true
   replicas: 2             # 提高：1 → 2（支持零停机更新 + 分担负载）
-  
+
   # ⚠️ 资源配置：提高 CPU 限制解决限流问题
   # 问题：CPU limit 1核导致限流(throttling)，LLM调用从4-7秒变成9-12秒
   # 原因：plugin-daemon 运行 15+ 个 Python 插件进程，需要更多 CPU
@@ -574,7 +574,7 @@ pluginDaemon:
     limits:
       cpu: "3000m"        # 提高：1000m → 2000m（关键！解决CPU限流）
       memory: "4Gi"       # 保持不变
-  
+
   # 延迟接入流量配置（解决启动时编译问题）
   # 问题：plugin-daemon 启动需要 5-8 分钟编译插件，期间不应接收请求
   # 方案：使用 HTTP 健康检查 + 足够长的延迟，确保编译完成后才接入流量
@@ -587,13 +587,13 @@ pluginDaemon:
     timeoutSeconds: 5
     failureThreshold: 30      # 允许失败 30 次（5 分钟容错）
     successThreshold: 1       # 成功 1 次即可
-  
+
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
-  
+
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
@@ -606,7 +606,7 @@ pluginDaemon:
                   values:
                     - plugin-daemon
             topologyKey: kubernetes.io/hostname
-  
+
   extraEnv:
     - name: TZ
       value: "Asia/Shanghai"
@@ -676,12 +676,12 @@ affinity: {}
 # │ 剩余缓冲       │ -    │ ~6100m       │ ~14Gi         │ 50%+ 余量 ✅   │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
-# 数据库连接数预算（小集群）：
-#   - API: 2 Pod × 15 = 30 连接
-#   - Worker: 1 Pod × 8 = 8 连接
-#   - Beat: 1 Pod × 5 = 5 连接
-#   - PluginDaemon: 1 Pod × 8 = 8 连接
-#   - 总计：~51 连接（远低于数据库上限）
+# 数据库连接数预算（数据库上限 400）：
+#   - API: 2~4 Pod × 2 worker × (20+10) = 120~240 连接
+#   - Worker: 1 Pod × (10+5) = 15 连接
+#   - Beat: 1 Pod × (3+2) = 5 连接
+#   - PluginDaemon: 2 Pod × (5+3) = 16 连接
+#   - 总计：156~276 连接（HPA 最大 4 pod 时 276，安全余量 31%）
 #
 # Milvus 部署建议：
 #   1. 使用 Milvus Standalone 模式（非集群模式）
