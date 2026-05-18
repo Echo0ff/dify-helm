@@ -1,19 +1,15 @@
 # ============================================
-# Dify Helm Chart - 生产环境配置（小集群版）
+# Dify Helm Chart - 生产环境配置（海外精品小集群 / Dify 1.13.3）
 # ============================================
-# 说明：
-# - 本文件针对小规模集群优化（4C8G * 3 = 12C 24G）
-# - 需要预留资源给 Milvus 向量数据库
-# - 配合 values-secrets.yaml 使用
 #
 # 集群配置（3节点小集群）:
 #   - Node 1-3: 4C/8G (standard)
-#   - 其中一个节点部署 Milvus（预留 ~2C/4G）
+#   - Milvus 独立容器（不在 K8s 内），占用 ~2C/4G
 #
 # 资源预算：
 #   - 总资源：12C / 24G
 #   - K8s 系统预留：~1.5C / 1.5G
-#   - Milvus 预留：~2C / 4G
+#   - Milvus（容器）：~2C / 4G
 #   - Dify 可用：~8.5C / 18.5G
 #
 # 部署命令：
@@ -24,17 +20,21 @@
 # ============================================
 
 ###################################
+# 全局域名配置
+# 1.13.x 迁移：原 api.url.appWeb / api.url.files 是死配置，
+# 改用 global.appWebDomain / global.filesDomain（参见 charts/dify/templates/config.tpl）
+###################################
+global:
+  appWebDomain: "http://3.19.168.125"
+  filesDomain: "http://3.19.168.125"
+
+###################################
 # API 服务优化
 ###################################
 api:
   enabled: true
   # 小集群：2 个副本足够
   replicas: 2
-
-  # 外部访问URL配置
-  url:
-    appWeb: "http://3.19.168.125"
-    files: "http://3.19.168.125"
 
   # ⚠️ 资源配置：大幅降低以适应小集群
   resources:
@@ -45,18 +45,8 @@ api:
       cpu: "1000m"      # 降低：原 2000m → 1000m
       memory: "2Gi"     # 降低：原 4Gi → 2Gi
 
-  # 自定义 prompts
-  persistence:
-    enabled: true
-    volumes:
-      - name: custom-prompts
-        configMap:
-          name: dify-prompts
-    volumeMounts:
-      - name: custom-prompts
-        mountPath: /app/api/core/llm_generator/prompts.py
-        subPath: prompts.py
-        readOnly: true
+  # 注意（1.13.x 迁移）：原通过 api.persistence.volumes 挂载 ConfigMap 覆盖 prompts.py 的方案已废弃
+  # 1.13.x 起改用环境变量 SUGGESTED_QUESTIONS_PROMPT 在下方 extraEnv 中配置
 
   # HPA：小集群保守配置
   autoscaling:
@@ -144,41 +134,53 @@ api:
       value: "10"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # ⚠️ Gunicorn 配置：小集群降低并发
+    # ⚠️ Gunicorn 配置（1.13.x：SSE 代理需要更多长连接）
     - name: SERVER_WORKER_AMOUNT
       value: "2"          # 保持 2 个 worker
     - name: SERVER_WORKER_CLASS
       value: "gevent"
     - name: SERVER_WORKER_CONNECTIONS
-      value: "30"         # 降低：原 50 → 30（减少内存压力）
+      value: "50"         # 提高：30 → 50（1.13.x SSE 代理需要更多长连接）
     - name: GUNICORN_TIMEOUT
       value: "360"
-    # ⚠️ 数据库连接池：需覆盖 graph engine 并发（每 worker 最多 5 个 GraphWorker + 请求自身）
+    # ⚠️ 数据库连接池：blocking workflow 仍在 API 执行
     - name: SQLALCHEMY_POOL_SIZE
-      value: "20"         # 提高：10 → 20（匹配 graph engine 并发需求）
+      value: "20"
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "10"         # 提高：5 → 10（应对突发并发）
+      value: "10"
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "30"         # 降低：180 → 30（快速失败，避免大量协程堆积等待）
+      value: "30"         # 快速失败，避免大量协程堆积等待
     - name: SQLALCHEMY_ECHO
       value: "false"
-    - name: SQLALCHEMY_ECHO_POOL
-      value: "false"
-    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
-      value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "true"
-    # Redis 连接池：小集群降低
-    - name: REDIS_POOL_SIZE
-      value: "10"         # 降低：原 40 → 10
-    - name: REDIS_POOL_MAX_CONNECTIONS
-      value: "20"         # 降低：原 60 → 20
-    - name: CELERY_BROKER_POOL_LIMIT
-      value: "10"         # 降低：原 40 → 10
+    # Redis 连接（1.13.x：替代失效的 REDIS_POOL_SIZE / REDIS_POOL_MAX_CONNECTIONS / CELERY_BROKER_POOL_LIMIT）
+    - name: REDIS_MAX_CONNECTIONS
+      value: "40"
+    # 1.13.x 新增：SSE 事件总线走 Redis Streams（at-least-once）
+    - name: PUBSUB_REDIS_CHANNEL_TYPE
+      value: "streams"
+    - name: PUBSUB_STREAMS_RETENTION_SECONDS
+      value: "600"
+    # 1.13.x 新增：uv 包管理器缓存目录
+    - name: UV_CACHE_DIR
+      value: "/tmp/.uv-cache"
+    # 1.13.x 新增：Celery 任务注解 + 插件相关
+    - name: CELERY_TASK_ANNOTATIONS
+      value: "null"
+    - name: PLUGIN_DAEMON_TIMEOUT
+      value: "600.0"
+    - name: PLUGIN_MODEL_SCHEMA_CACHE_TTL
+      value: "3600"
+    # 1.13.x 新增：HITL 人工输入超时检查（Human Input Node）
+    - name: ENABLE_HUMAN_INPUT_TIMEOUT_TASK
+      value: "true"
+    - name: HUMAN_INPUT_TIMEOUT_TASK_INTERVAL
+      value: "1"
     # 性能配置
     - name: HTTP_REQUEST_MAX_CONNECT_TIMEOUT
       value: "30"
@@ -186,25 +188,29 @@ api:
       value: "60"
     - name: HTTP_REQUEST_MAX_WRITE_TIMEOUT
       value: "30"
-    - name: RETRY_TIMES
-      value: "3"
     - name: WEB_API_CORS_ALLOW_ORIGINS
       value: "*"
     - name: SENTRY_DSN
       value: ""
-    # 自动删除日志
+    # 工作流日志清理（海外集群：使用 Dify 官方清理任务，无 pg_cron 分区表）
+    - name: ENABLE_WORKFLOW_RUN_CLEANUP_TASK
+      value: "true"
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
       value: "true"
     - name: WORKFLOW_LOG_RETENTION_DAYS
       value: "4"
     - name: WORKFLOW_LOG_CLEANUP_BATCH_SIZE
       value: "50"
+    # Graph Engine（blocking workflow 在 API 内执行）
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "3"  # 降低：5 → 3（减少空闲连接占用）
+      value: "3"
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "5"  # 降低：10 → 5（避免连接池耗尽，每 worker 池 30 可覆盖）
+      value: "5"
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"
+    # Custom Prompts（1.13.x 起支持环境变量覆盖，替代旧的 ConfigMap 挂载 prompts.py）
+    - name: SUGGESTED_QUESTIONS_PROMPT
+      value: "Please help me predict the three most likely questions that human would ask, and keep each question under 20 characters.\nMAKE SURE your output is the SAME language as the Assistant's latest response. The output must be an array in JSON format following the specified schema:\n[\"question1\",\"question2\",\"question3\"]\n"
 
 ###################################
 # Worker 服务优化
@@ -213,13 +219,13 @@ worker:
   enabled: true
   replicas: 1
 
-  # ⚠️ 资源配置：降低以适应小集群
+  # ⚠️ 资源配置（1.13.x：Worker 承接 9% streaming workflow + 后台任务，适度提高 CPU 上限）
   resources:
     requests:
       cpu: "1000m"
       memory: "3Gi"
     limits:
-      cpu: "2000m"
+      cpu: "2500m"        # 提高：2000m → 2500m（streaming workflow 计算压力）
       memory: "5Gi"
 
   # autoscaling:
@@ -263,33 +269,56 @@ worker:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # ⚠️ Worker 数据库连接池：知识库索引需要更多连接
+    # ⚠️ Worker 数据库连接池（1.13.x：streaming workflow + LLM I/O 持连接）
     - name: SQLALCHEMY_POOL_SIZE
-      value: "10"         # 提高：5 → 20（知识库索引需要）
+      value: "15"         # 提高：10 → 15（streaming workflow 持有 LLM 长连接）
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "5"         # 提高：3 → 10
+      value: "5"
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "180"
-    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
-      value: "rollback"
+      value: "30"         # 降低：180 → 30（快速失败）
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "true"
-    # Celery Worker：小集群降低并发
+    # Celery Worker（1.13.x：使用固定 CELERY_WORKER_AMOUNT，替代 CELERY_MAX_WORKERS / CELERY_MIN_WORKERS）
     - name: CELERY_AUTO_SCALE
       value: "false"
-    - name: CELERY_MAX_WORKERS
-      value: "1"
-    - name: CELERY_MIN_WORKERS
-      value: "1"
+    - name: CELERY_WORKER_AMOUNT
+      value: "3"          # streaming 峰值 1-3 并发，3 个 gevent 协程足够
     - name: CELERY_WORKER_CLASS
       value: "gevent"
-    - name: MAX_TASK_PRE_CHILD
-      value: "100"
-    # 自动删除日志
+    - name: CELERY_PREFETCH_MULTIPLIER
+      value: "1"
+    - name: MAX_TASKS_PER_CHILD
+      value: "100"        # 修正拼写：原 MAX_TASK_PRE_CHILD（typo）→ MAX_TASKS_PER_CHILD
+    # Redis（1.13.x：替代失效的 REDIS_POOL_SIZE / REDIS_POOL_MAX_CONNECTIONS）
+    - name: REDIS_MAX_CONNECTIONS
+      value: "30"
+    # 1.13.x 新增：SSE 事件总线（必须与 API 一致）
+    - name: PUBSUB_REDIS_CHANNEL_TYPE
+      value: "streams"
+    - name: PUBSUB_STREAMS_RETENTION_SECONDS
+      value: "600"
+    # 1.13.x 新增：uv 包管理器缓存目录
+    - name: UV_CACHE_DIR
+      value: "/tmp/.uv-cache"
+    # 1.13.x 新增：Celery 任务注解 + 插件相关
+    - name: CELERY_TASK_ANNOTATIONS
+      value: "null"
+    - name: PLUGIN_DAEMON_TIMEOUT
+      value: "600.0"
+    - name: PLUGIN_MODEL_SCHEMA_CACHE_TTL
+      value: "3600"
+    # 1.13.x 新增：HITL 人工输入超时检查
+    - name: ENABLE_HUMAN_INPUT_TIMEOUT_TASK
+      value: "true"
+    - name: HUMAN_INPUT_TIMEOUT_TASK_INTERVAL
+      value: "1"
+    # 工作流日志清理（海外集群：使用 Dify 官方清理任务，无 pg_cron 分区表）
+    - name: ENABLE_WORKFLOW_RUN_CLEANUP_TASK
+      value: "true"
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
       value: "true"
     - name: WORKFLOW_LOG_RETENTION_DAYS
@@ -319,9 +348,9 @@ worker:
     - name: CODE_EXECUTION_WRITE_TIMEOUT
       value: "10"
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "3"  # 与 API 保持一致
+      value: "3"
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "5"  # 与 API 保持一致
+      value: "6"          # 提高：5 → 6（Worker 承接 streaming workflow，需更多并行能力）
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"
 
@@ -352,20 +381,31 @@ beat:
       value: "Asia/Shanghai"
     # Beat 数据库连接池
     - name: SQLALCHEMY_POOL_SIZE
-      value: "3"          # 降低：原 10 → 3
+      value: "3"
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "2"          # 降低：原 5 → 2
+      value: "2"
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "270"
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
       value: "180"
-    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
-      value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "true"
-    # 自动删除日志
+    # 1.13.x 新增：uv 包管理器缓存目录
+    - name: UV_CACHE_DIR
+      value: "/tmp/.uv-cache"
+    # 1.13.x 新增：Celery 任务注解
+    - name: CELERY_TASK_ANNOTATIONS
+      value: "null"
+    # 1.13.x 新增：HITL 人工输入超时检查
+    - name: ENABLE_HUMAN_INPUT_TIMEOUT_TASK
+      value: "true"
+    - name: HUMAN_INPUT_TIMEOUT_TASK_INTERVAL
+      value: "1"
+    # 工作流日志清理（海外集群：使用 Dify 官方清理任务）
+    - name: ENABLE_WORKFLOW_RUN_CLEANUP_TASK
+      value: "true"
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
       value: "true"
     - name: WORKFLOW_LOG_RETENTION_DAYS
@@ -623,8 +663,6 @@ pluginDaemon:
       value: "true"
     - name: SQLALCHEMY_POOL_TIMEOUT
       value: "180"
-    - name: SQLALCHEMY_POOL_RESET_ON_RETURN
-      value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "true"
     # 自动删除日志
