@@ -4,13 +4,20 @@
 #
 # 集群配置（3节点小集群）:
 #   - Node 1-3: 4C/8G (standard)
-#   - Milvus 独立容器（不在 K8s 内），占用 ~2C/4G
+#   - 总资源：12C / 24G
 #
-# 资源预算：
+# 向量库：外部 Qdrant（独立部署在 K8s 集群外，不占用 K8s 资源）
+#   - 启用方式：在 values-secrets.yaml 中设置
+#       externalQdrant.enabled: true
+#       externalQdrant.endpoint: "http://<qdrant-host>:6333"
+#       externalQdrant.apiKey: "<api-key>"
+#   - Dify 1.13.x 起统一使用 VECTOR_STORE=qdrant（由 helm 模板根据 enabled 自动注入）
+#
+# 资源预算（向量库已独立，全部资源给 Dify + K8s 系统）：
 #   - 总资源：12C / 24G
 #   - K8s 系统预留：~1.5C / 1.5G
-#   - Milvus（容器）：~2C / 4G
-#   - Dify 可用：~8.5C / 18.5G
+#   - Dify 可用：~10.5C / 22G（原 8.5C/18.5G → 多出 ~2C/4G 余量）
+#   - 余量策略：单 Pod limits 保持不变，多出资源交给 HPA 弹性扩容
 #
 # 部署命令：
 # helm upgrade dify ./charts/dify -n dify \
@@ -46,14 +53,15 @@ api:
       memory: "2Gi"     # 降低：原 4Gi → 2Gi
 
   # 注意（1.13.x 迁移）：原通过 api.persistence.volumes 挂载 ConfigMap 覆盖 prompts.py 的方案已废弃
-  # 1.13.x 起改用环境变量 SUGGESTED_QUESTIONS_PROMPT 在下方 extraEnv 中配置
+  # 当前使用 Dify 1.13.x 内置默认 prompt（多语言友好，自动适配响应语言）
+  # 如需自定义，可在 extraEnv 中追加 SUGGESTED_QUESTIONS_PROMPT 等环境变量
 
-  # HPA：小集群保守配置
+  # HPA：向量库独立后释放资源，maxReplicas 提高（4 → 5），多出资源交给 autoscaling
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 4        # 降低：原 4 → 3（资源有限）
-    targetCPUUtilizationPercentage: 80   # 提高阈值，减少扩容频率
+    maxReplicas: 5        # 提高：4 → 5（向量库独立后释放 ~2C/4G，HPA 多 1 个副本余量）
+    targetCPUUtilizationPercentage: 80
     targetMemoryUtilizationPercentage: 80
 
   # 健康检查
@@ -208,9 +216,6 @@ api:
       value: "5"
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"
-    # Custom Prompts（1.13.x 起支持环境变量覆盖，替代旧的 ConfigMap 挂载 prompts.py）
-    - name: SUGGESTED_QUESTIONS_PROMPT
-      value: "Please help me predict the three most likely questions that human would ask, and keep each question under 20 characters.\nMAKE SURE your output is the SAME language as the Assistant's latest response. The output must be an array in JSON format following the specified schema:\n[\"question1\",\"question2\",\"question3\"]\n"
 
 ###################################
 # Worker 服务优化
@@ -484,21 +489,20 @@ web:
 ###################################
 sandbox:
   enabled: true
-  replicas: 2             # ⚠️ 降低：原 2 → 1（节省资源）
+  replicas: 2
 
-  # ⚠️ 资源配置：大幅降低
   resources:
     requests:
-      cpu: "1000m"         # 降低：原 1000m → 200m
-      memory: "512Mi"     # 降低：原 2Gi → 512Mi
+      cpu: "1000m"
+      memory: "512Mi"
     limits:
-      cpu: "3000m"         # 降低：原 2000m → 3000m
-      memory: "2Gi"     # 降低：原 4Gi → 512Mi
+      cpu: "3000m"
+      memory: "2Gi"
 
   autoscaling:
     enabled: true
-    minReplicas: 2        # 降低：原 2 → 1
-    maxReplicas: 3        # 降低：原 3 → 2
+    minReplicas: 2
+    maxReplicas: 4        # 提高：3 → 4（向量库独立后释放资源，code 节点高并发时可多扩 1 个）
     targetCPUUtilizationPercentage: 70
 
   updateStrategy:
@@ -689,50 +693,52 @@ tolerations: []
 affinity: {}
 
 # ==============================================================================
-# 小集群配置说明（4C8G * 3 = 12C 24G）
+# 小集群配置说明（4C8G * 3 = 12C 24G，向量库 Qdrant 已独立到集群外）
 # ==============================================================================
 #
-# 资源分配预算：
+# 资源分配预算（requests 维度，常态）：
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ 组件           │ 副本 │ CPU requests │ 内存 requests │ 占比           │
+# │ 组件           │ 副本 │ CPU requests │ 内存 requests │ 角色（1.13.x）          │
 # ├─────────────────────────────────────────────────────────────────────────────┤
-# │ API            │ 2    │ 1000m        │ 2Gi           │ 核心服务       │
-# │ Worker         │ 1    │ 300m         │ 512Mi         │ 异步任务       │
-# │ Beat           │ 1    │ 100m         │ 128Mi         │ 定时任务       │
-# │ Web            │ 1    │ 100m         │ 128Mi         │ 前端           │
-# │ Sandbox        │ 1    │ 200m         │ 256Mi         │ 代码执行       │
-# │ Proxy          │ 1    │ 100m         │ 128Mi         │ 反向代理       │
-# │ SSRF Proxy     │ 1    │ 100m         │ 256Mi         │ SSRF 防护      │
-# │ Plugin Daemon  │ 1    │ 500m         │ 4Gi           │ 插件服务       │
+# │ API            │ 2    │ 1000m        │ 2Gi           │ blocking workflow + SSE │
+# │ Worker         │ 1    │ 1000m        │ 3Gi           │ streaming workflow + 后台│
+# │ Beat           │ 1    │ 100m         │ 256Mi         │ 定时任务调度            │
+# │ Web            │ 1    │ 500m         │ 512Mi         │ 前端                    │
+# │ Sandbox        │ 2    │ 2000m        │ 1Gi           │ 代码节点执行            │
+# │ Proxy          │ 1    │ 100m         │ 128Mi         │ Nginx 反向代理          │
+# │ SSRF Proxy     │ 1    │ 100m         │ 256Mi         │ SSRF 防护               │
+# │ Plugin Daemon  │ 2    │ 2000m        │ 4Gi           │ 插件运行时              │
 # ├─────────────────────────────────────────────────────────────────────────────┤
-# │ Dify 总计      │ -    │ 2400m        │ 4.4Gi         │               │
-# │ K8s 系统预留   │ -    │ ~1500m       │ ~1.5Gi        │               │
-# │ Milvus 预留    │ -    │ ~2000m       │ ~4Gi          │ 向量数据库     │
-# ├─────────────────────────────────────────────────────────────────────────────┤
-# │ 总使用量       │ -    │ ~5900m       │ ~14Gi         │               │
-# │ 可用资源       │ -    │ 12000m       │ 24Gi          │               │
-# │ 剩余缓冲       │ -    │ ~6100m       │ ~14Gi         │ 50%+ 余量 ✅   │
+# │ Dify 总计      │ -    │ ~6800m       │ ~11.2Gi       │                         │
+# │ K8s 系统预留   │ -    │ ~1500m       │ ~1.5Gi        │                         │
+# │ 总使用量       │ -    │ ~8300m       │ ~12.7Gi       │ 占总资源 69% / 53%      │
+# │ 集群可用       │ -    │ 12000m       │ 24Gi          │                         │
+# │ 剩余缓冲       │ -    │ ~3700m       │ ~11.3Gi       │ 留给 HPA 扩容 + 突发     │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
-# 数据库连接数预算（数据库上限 400）：
-#   - API: 2~4 Pod × 2 worker × (20+10) = 120~240 连接
-#   - Worker: 1 Pod × (10+5) = 15 连接
-#   - Beat: 1 Pod × (3+2) = 5 连接
-#   - PluginDaemon: 2 Pod × (5+3) = 16 连接
-#   - 总计：156~276 连接（HPA 最大 4 pod 时 276，安全余量 31%）
+# HPA 峰值预算（API maxReplicas=5, Sandbox maxReplicas=4）：
+#   - API:       5 × 1C/2G = 5C/10G（requests）
+#   - Sandbox:   4 × 1C/0.5G = 4C/2G（requests）
+#   - 其余组件不弹缩
+#   - 峰值 Dify 总 requests ≈ 9.2C / 15.5G，仍在集群可用范围内（K8s 预留后约 10.5C/22G）
 #
-# Milvus 部署建议：
-#   1. 使用 Milvus Standalone 模式（非集群模式）
-#   2. 推荐资源配置：
-#      - requests: 1.5C / 3Gi
-#      - limits: 2C / 4Gi
-#   3. 建议使用 nodeSelector 将 Milvus 固定到一个节点
-#   4. 可以与 Dify 组件共存，资源足够
+# 数据库连接数预算（RDS max_connections = 400）：
+#   - API:          5 Pod × 2 worker × (20+10) = 300（HPA 峰值）
+#   - Worker:       1 Pod × 1 进程 × (15+5)    = 20
+#   - Beat:         1 Pod × (3+2)              = 5
+#   - PluginDaemon: 2 Pod × (5+3)              = 16
+#   - 总计峰值：~341 / 400（85% 安全水位，建议监控；如频繁触及可考虑提高 RDS 上限）
+#
+# 向量库（外部 Qdrant，独立机器）：
+#   - 在 values-secrets.yaml 中启用：
+#       externalQdrant.enabled: true
+#       externalQdrant.endpoint: "http://<qdrant-host>:6333"
+#       externalQdrant.apiKey: "<api-key>"
+#   - 数据迁移：旧集群（Milvus）→ 新集群（Qdrant）需要重建索引（详见升级手册）
 #
 # 性能预期：
-#   - 支持 50-100 并发用户
-#   - 适合开发/测试/小规模生产环境
-#   - 如需更高并发，建议升级节点配置
+#   - 支持 50-100 并发用户（峰值通过 HPA 自动扩到 5 副本可达 ~250 并发）
+#   - 适合海外小流量生产环境（日请求数万级）
 #
 # 使用方式：
 # helm upgrade dify charts/dify -f values-dify.yaml -f values-secrets.yaml -f values-dify-prod.yaml -n dify
