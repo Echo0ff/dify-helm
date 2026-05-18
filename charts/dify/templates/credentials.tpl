@@ -1,8 +1,8 @@
 {{- define "dify.api.credentials" -}}
 # A secret key that is used for securely signing the session cookie and encrypting sensitive information on the database. You can generate a strong key using `openssl rand -base64 42`.
-SECRET_KEY: {{ .Values.api.secretKey | b64enc | quote }}
+SECRET_KEY: {{ .Values.global.appSecretKey | b64enc | quote }}
 {{- if .Values.sandbox.enabled }}
-CODE_EXECUTION_API_KEY: {{ .Values.sandbox.auth.apiKey | b64enc | quote }}
+CODE_EXECUTION_API_KEY: {{ .Values.sandbox.auth.apiKey | default .Values.global.internalApiKey | b64enc | quote }}
 {{- end }}
 {{- include "dify.db.credentials" . }}
 # The configurations of redis connection.
@@ -14,8 +14,8 @@ CODE_EXECUTION_API_KEY: {{ .Values.sandbox.auth.apiKey | b64enc | quote }}
 {{ include "dify.vectordb.credentials" . }}
 {{ include "dify.mail.credentials" . }}
 {{- if .Values.pluginDaemon.enabled }}
-PLUGIN_DAEMON_KEY: {{ .Values.pluginDaemon.auth.serverKey | b64enc | quote }}
-INNER_API_KEY_FOR_PLUGIN: {{ .Values.pluginDaemon.auth.difyApiKey | b64enc | quote }}
+PLUGIN_DAEMON_KEY: {{ .Values.pluginDaemon.auth.serverKey | default .Values.global.internalApiKey | b64enc | quote }}
+INNER_API_KEY_FOR_PLUGIN: {{ .Values.pluginDaemon.auth.difyApiKey | default .Values.global.internalApiKey | b64enc | quote }}
 {{- end }}
 {{- if and .Values.api.otel.enabled (not .Values.externalSecret.enabled) }}
 OTLP_API_KEY: {{ .Values.api.otel.apiKey | b64enc | quote }}
@@ -23,7 +23,7 @@ OTLP_API_KEY: {{ .Values.api.otel.apiKey | b64enc | quote }}
 {{- end }}
 
 {{- define "dify.worker.credentials" -}}
-SECRET_KEY: {{ .Values.api.secretKey | b64enc | quote }}
+SECRET_KEY: {{ .Values.global.appSecretKey | b64enc | quote }}
 # The configurations of postgres database connection.
 # It is consistent with the configuration in the 'db' service below.
 {{ include "dify.db.credentials" . }}
@@ -38,8 +38,8 @@ SECRET_KEY: {{ .Values.api.secretKey | b64enc | quote }}
 {{ include "dify.vectordb.credentials" . }}
 {{ include "dify.mail.credentials" . }}
 {{- if .Values.pluginDaemon.enabled }}
-PLUGIN_DAEMON_KEY: {{ .Values.pluginDaemon.auth.serverKey | b64enc | quote }}
-INNER_API_KEY_FOR_PLUGIN: {{ .Values.pluginDaemon.auth.difyApiKey | b64enc | quote }}
+PLUGIN_DAEMON_KEY: {{ .Values.pluginDaemon.auth.serverKey | default .Values.global.internalApiKey | b64enc | quote }}
+INNER_API_KEY_FOR_PLUGIN: {{ .Values.pluginDaemon.auth.difyApiKey | default .Values.global.internalApiKey | b64enc | quote }}
 {{- end }}
 {{- if and .Values.api.otel.enabled (not .Values.externalSecret.enabled) }}
 OTLP_API_KEY: {{ .Values.api.otel.apiKey | b64enc | quote }}
@@ -120,12 +120,12 @@ REDIS_SENTINEL_PASSWORD: {{ .auth.password | b64enc | quote }}
 # If use Redis Sentinel, format as follows: `sentinel://<redis_username>:<redis_password>@<sentinel_host1>:<sentinel_port>/<redis_database>`
 # For high availability, you can configure multiple Sentinel nodes (if provided) separated by semicolons like below example:
 # Example: sentinel://:difyai123456@localhost:26379/1;sentinel://:difyai12345@localhost:26379/1;sentinel://:difyai12345@localhost:26379/1
-{{- $redisPassword := .password }}
-{{- $redisCeleryDB := .db.celery}}
-{{- $sentinelUrls := list }}
-{{- range $sentinel := .sentinel.sentinels }}
-{{- $sentinelUrls = append $sentinelUrls (printf "sentinel://:%s@%s/%v" $redisPassword $sentinel $redisCeleryDB) }}
-{{- end }}
+      {{- $redisPassword := .password }}
+      {{- $redisCeleryDB := .db.celery}}
+      {{- $sentinelUrls := list }}
+      {{- range $sentinel := .sentinel.sentinels }}
+      {{- $sentinelUrls = append $sentinelUrls (printf "sentinel://:%s@%s/%v" $redisPassword $sentinel $redisCeleryDB) }}
+      {{- end }}
 CELERY_BROKER_URL: {{ join ";" $sentinelUrls | b64enc | quote }}
 CELERY_SENTINEL_PASSWORD: {{ .sentinel.password | b64enc | quote }}
     {{- else }}
@@ -137,9 +137,9 @@ CELERY_BROKER_URL: {{ printf "%s://%s:%s@%s:%v/%v" $scheme .username .password .
     {{- end }}
   {{- end }}
 {{- else if .Values.redis.enabled }}
-{{- $releaseName := printf "%s" .Release.Name -}}
 {{- $namespace := .Release.Namespace -}}
 {{- with .Values.redis }}
+  {{- $redisFullname := include "dify.redis.fullname" $ }}
   {{- if .sentinel.enabled }}
     {{- $sentinelPort := .sentinel.service.ports.sentinel | int -}}
     {{- $masterSet := .sentinel.masterSet -}}
@@ -147,17 +147,17 @@ CELERY_BROKER_URL: {{ printf "%s://%s:%s@%s:%v/%v" $scheme .username .password .
 # If use Redis Sentinel, format as follows: `sentinel://<redis_username>:<redis_password>@<sentinel_host1>:<sentinel_port>/<redis_database>`
 # For high availability, you can configure multiple Sentinel nodes (if provided) separated by semicolons like below example:
 # Example: sentinel://:difyai123456@localhost:26379/1;sentinel://:difyai12345@localhost:26379/1;sentinel://:difyai12345@localhost:26379/1
-{{- $sentinelUrls := list }}
-{{- range $i, $e := until (.replica.replicaCount | int) }}
-{{- $sentinelUrls = append $sentinelUrls (printf "sentinel://:%s@%s-redis-node-%d.%s-redis-headless.%s.svc.cluster.local:%d/1" $password $releaseName $i $releaseName $namespace $sentinelPort) }}
-{{- end }}
+    {{- $sentinelUrls := list }}
+    {{- range $i, $e := until (.replica.replicaCount | int) }}
+    {{- $sentinelUrls = append $sentinelUrls (printf "sentinel://:%s@%s-node-%d.%s-headless.%s.svc.cluster.local:%d/1" $password $redisFullname $i $redisFullname $namespace $sentinelPort) }}
+    {{- end }}
 CELERY_BROKER_URL: {{ join ";" $sentinelUrls | b64enc | quote }}
 CELERY_SENTINEL_PASSWORD: {{ .auth.password | b64enc | quote }}
   {{- else }}
 # Use standalone redis as the broker, and redis db 1 for celery broker. (redis_username is usually set by defualt as empty)
 # Format as follows: `redis://<redis_username>:<redis_password>@<redis_host>:<redis_port>/<redis_database>`.
 # Example: redis://:difyai123456@redis:6379/1
-    {{- $redisHost := printf "%s-redis-master" $releaseName -}}
+    {{- $redisHost := printf "%s-master" $redisFullname }}
     {{- $redisPort := .master.service.ports.redis }}
 CELERY_BROKER_URL: {{ printf "redis://:%s@%s:%v/1" .auth.password $redisHost $redisPort | b64enc | quote }}
   {{- end }}
@@ -213,15 +213,15 @@ SMTP_PASSWORD: {{ .Values.api.mail.smtp.password | b64enc | quote }}
 {{- end }}
 
 {{- define "dify.sandbox.credentials" -}}
-API_KEY: {{ .Values.sandbox.auth.apiKey | b64enc | quote }}
+API_KEY: {{ .Values.sandbox.auth.apiKey | default .Values.global.internalApiKey | b64enc | quote }}
 {{- end }}
 
 {{- define "dify.pluginDaemon.credentials" -}}
 {{ include "dify.db.credentials" . }}
 {{ include "dify.redis.credentials" . }}
 {{ include "dify.pluginDaemon.storage.credentials" . }}
-SERVER_KEY: {{ .Values.pluginDaemon.auth.serverKey | b64enc | quote }}
-DIFY_INNER_API_KEY: {{ .Values.pluginDaemon.auth.difyApiKey | b64enc | quote }}
+SERVER_KEY: {{ .Values.pluginDaemon.auth.serverKey | default .Values.global.internalApiKey | b64enc | quote }}
+DIFY_INNER_API_KEY: {{ .Values.pluginDaemon.auth.difyApiKey | default .Values.global.internalApiKey | b64enc | quote }}
 {{- end }}
 
 {{- define "dify.pluginDaemon.storage.credentials" -}}
