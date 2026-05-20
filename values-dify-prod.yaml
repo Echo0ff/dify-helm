@@ -40,8 +40,33 @@ global:
 ###################################
 api:
   enabled: true
-  # 小集群：2 个副本足够
+
+  # ──────────────────────────────────────────────────────────────
+  # 🔄 升级模式切换(每次升级前后都要切一次)
+  #
+  # 原理: 升级时 api 必须单副本跑 alembic migration(alembic 不支持并发)
+  #       worker / plugin-daemon / beat 有 check-api initContainer
+  #       会自动 curl api /health,api 没 ready 它们就一直等,不会乱起
+  #
+  # 切换步骤:
+  #   ① 升级前: 注释【正常运行】4 行,取消注释【升级模式】4 行 → helm upgrade
+  #   ② 等 api pod 日志出现 "Migration completed" 且 Ready 1/1
+  #   ③ 升级后: 反过来切回【正常运行】 → 再 helm upgrade 一次
+  # ──────────────────────────────────────────────────────────────
+
+  # # 【升级模式】api 单副本 + HPA 关闭(用完反注释)
+  # replicas: 1
+  # autoscaling:
+  #   enabled: false
+
+  # 【正常运行】小集群 2 副本 + HPA(min 2 / max 3)
   replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 3        # 3 让出rds预算
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
 
   # ⚠️ 资源配置：大幅降低以适应小集群
   resources:
@@ -55,14 +80,6 @@ api:
   # 注意（1.13.x 迁移）：原通过 api.persistence.volumes 挂载 ConfigMap 覆盖 prompts.py 的方案已废弃
   # 当前使用 Dify 1.13.x 内置默认 prompt（多语言友好，自动适配响应语言）
   # 如需自定义，可在 extraEnv 中追加 SUGGESTED_QUESTIONS_PROMPT 等环境变量
-
-  # HPA：向量库独立后释放资源，maxReplicas 提高（4 → 5），多出资源交给 autoscaling
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 3        # 3 让出rds预算
-    targetCPUUtilizationPercentage: 80
-    targetMemoryUtilizationPercentage: 80
 
   # 健康检查
   livenessProbe:
@@ -606,7 +623,7 @@ ssrfProxy:
 ###################################
 pluginDaemon:
   enabled: true
-  replicas: 2             # 提高：1 → 2（支持零停机更新 + 分担负载）
+  replicas: 1             # 提高：1 → 2（支持零停机更新 + 分担负载）
 
   # ⚠️ 资源配置：提高 CPU 限制解决限流问题
   # 问题：CPU limit 1核导致限流(throttling)，LLM调用从4-7秒变成9-12秒
@@ -656,6 +673,9 @@ pluginDaemon:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
+    # 新增：RDS 强制 SSL，pgx 默认 disable 必须显式开启
+    - name: DB_SSL_MODE
+      value: "require"
     # PluginDaemon 数据库连接池
     - name: SQLALCHEMY_POOL_SIZE
       value: "5"          # 降低：原 20 → 5
