@@ -1,21 +1,15 @@
 # ============================================
-# Dify Helm Chart - 生产环境优化配置
+# Dify Helm Chart - 生产环境优化配置（国内公共集群 / Dify 1.13.3）
 # ============================================
 # 说明：
-# - 本文件包含生产环境的性能优化配置
+# - 本文件为国内公共集群生产配置（已升级至 1.13.3）
 # - 基于 values-dify.yaml，针对高 RPS 和高可用场景优化
 # - 配合 values-secrets.yaml 使用
 #
-# 集群配置（3节点 HA 集群）: 
+# 集群配置（3节点 HA 集群）:
 #   - Node 1: 32C/128G (high-performance) - 高性能节点，API/Worker 优先调度
 #   - Node 2: 16C/32G (standard) - 标准节点，均衡调度
 #   - Node 3: 16C/32G (standard) - 标准节点，均衡调度
-#
-# 优化目标：
-#   - 高并发：支持 400+ RPS
-#   - 高可用：3 节点 HA，Pod 分散调度
-#   - 资源优化：合理的 requests/limits，避免 OOM
-#   - 连接池优化：Gunicorn + SQLAlchemy + Redis 连接池调优
 #
 # 部署命令：
 # helm upgrade dify ./charts/dify -n dify \
@@ -25,21 +19,44 @@
 # ============================================
 
 ###################################
+# 全局域名配置
+# 1.13.x 迁移：原 api.url.appWeb / api.url.files 已废弃，
+# 改用 global.appWebDomain / global.filesDomain
+# （参见 charts/dify/templates/config.tpl）
+# TODO: 绿集群 IP/域名待替换（当前为旧蓝集群 47.97.245.112，仅占位）
+###################################
+global:
+  appWebDomain: "http://47.97.245.112"
+  filesDomain: "http://47.97.245.112"
+
+###################################
 # API 服务优化（最关键）
 ###################################
 api:
   enabled: true
-  # 初始副本数：9 个（增加API处理能力，主要处理工作流/对话流）
+
+  # ──────────────────────────────────────────────────────────────
+  # 🔄 升级模式切换（每次 helm upgrade 前后都要切一次）
+  #
+  # 原理: 升级时 api 必须单副本跑 alembic migration（alembic 不支持并发）；
+  #       worker / plugin-daemon / beat 都带 check-api initContainer，
+  #       会自动 curl api /health，api 没 ready 它们就一直等，不会乱起。
+  #
+  # 切换步骤:
+  #   ① 升级前: 注释【正常运行】4 行，取消注释【升级模式】4 行 → helm upgrade
+  #   ② 等 api pod 日志出现 "Migration completed" 且 Ready 1/1
+  #   ③ 升级后: 反过来切回【正常运行】 → 再 helm upgrade 一次
+  # ──────────────────────────────────────────────────────────────
+
+  # # 【升级模式】api 单副本 + HPA 关闭（用完反注释）
+  # replicas: 1
+  # autoscaling:
+  #   enabled: false
+
+  # 【正常运行】国内集群 9 副本 + HPA（min 9 / max 18）
   replicas: 9
-  
-  # ⚠️ 外部访问URL配置（解决工作流发布URL问题）
-  # 只配置工作流发布需要的URL，其他保持默认（使用same domain）
-  url:
-    # 应用Web URL（⚠️ 关键：工作流发布时使用此URL）
-    # 修复从 http://dify-ups/workflow/xxx 到正确的外部地址
-    appWeb: "http://47.97.245.112"
-    files: "http://47.97.245.112"
-  
+
+
   # 资源配置（基于实测：CPU ~250m，MEM ~1.3Gi）
   # 策略：requests 按实际 2 倍预留，limits 保持不变给突发空间
   # 降低 requests 的目的：释放调度空间，让 HPA 能扩出更多 Pod
@@ -203,13 +220,29 @@ api:
       value: "rollback"         # 归还连接时自动回滚未提交事务
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "false"            # FIFO 模式：所有连接轮流使用，让 POOL_RECYCLE 有效淘汰旧连接
-    # Redis 连接池优化（增加连接池避免超时）
-    - name: REDIS_POOL_SIZE
-      value: "40"               # 每个 Pod 40 个连接（8-12 Pod = 320-480 连接）
-    - name: REDIS_POOL_MAX_CONNECTIONS
-      value: "60"               # 最大 60 个连接（峰值时使用）
-    - name: CELERY_BROKER_POOL_LIMIT
-      value: "40"               # Celery broker 连接池（匹配 REDIS_POOL_SIZE）
+    # Redis 连接（1.13.x：原 REDIS_POOL_SIZE/REDIS_POOL_MAX_CONNECTIONS/CELERY_BROKER_POOL_LIMIT 已失效）
+    - name: REDIS_MAX_CONNECTIONS
+      value: "60"               # 单 Pod 最大 60 个连接（峰值时使用）
+    # 1.13.x 新增：SSE 事件总线走 Redis Streams（at-least-once）
+    - name: PUBSUB_REDIS_CHANNEL_TYPE
+      value: "streams"
+    - name: PUBSUB_STREAMS_RETENTION_SECONDS
+      value: "600"
+    # 1.13.x 新增：uv 包管理器缓存目录
+    - name: UV_CACHE_DIR
+      value: "/tmp/.uv-cache"
+    # 1.13.x 新增：Celery 任务注解 + 插件相关
+    - name: CELERY_TASK_ANNOTATIONS
+      value: "null"
+    - name: PLUGIN_DAEMON_TIMEOUT
+      value: "600.0"
+    - name: PLUGIN_MODEL_SCHEMA_CACHE_TTL
+      value: "3600"
+    # 1.13.x 新增：HITL 人工输入超时检查（Human Input Node）
+    - name: ENABLE_HUMAN_INPUT_TIMEOUT_TASK
+      value: "true"
+    - name: HUMAN_INPUT_TIMEOUT_TASK_INTERVAL
+      value: "1"
     # 性能优化配置
     - name: HTTP_REQUEST_MAX_CONNECT_TIMEOUT
       value: "30"               # HTTP 请求连接超时
@@ -340,17 +373,38 @@ worker:
       value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "false"            # FIFO 模式
-    # Celery Worker 优化（使用正确的 Dify 环境变量名）
-    - name: CELERY_AUTO_SCALE
-      value: "true"             # 启用自动伸缩
-    - name: CELERY_MAX_WORKERS
-      value: "4"                # 最多 8 个并发 worker
-    - name: CELERY_MIN_WORKERS
-      value: "2"                # 最少 2 个并发 worker
+    # Celery Worker（1.13.x：使用固定 CELERY_WORKER_AMOUNT，替代 CELERY_MAX_WORKERS / CELERY_MIN_WORKERS / CELERY_AUTO_SCALE）
+    - name: CELERY_WORKER_AMOUNT
+      value: "4"                # 4 个 gevent 协程进程（match 国内原 MAX_WORKERS）
     - name: CELERY_WORKER_CLASS
       value: "gevent"           # 使用 gevent worker
-    - name: MAX_TASK_PRE_CHILD
-      value: "100"              # 每个 worker 处理 100 个任务后重启（防止内存泄漏）
+    - name: CELERY_PREFETCH_MULTIPLIER
+      value: "1"
+    - name: MAX_TASKS_PER_CHILD
+      value: "100"              # 修正拼写：MAX_TASK_PRE_CHILD（typo）→ MAX_TASKS_PER_CHILD
+    # Redis（1.13.x：原 REDIS_POOL_SIZE / REDIS_POOL_MAX_CONNECTIONS 已失效）
+    - name: REDIS_MAX_CONNECTIONS
+      value: "30"
+    # 1.13.x 新增：SSE 事件总线（必须与 API 一致）
+    - name: PUBSUB_REDIS_CHANNEL_TYPE
+      value: "streams"
+    - name: PUBSUB_STREAMS_RETENTION_SECONDS
+      value: "600"
+    # 1.13.x 新增：uv 包管理器缓存目录
+    - name: UV_CACHE_DIR
+      value: "/tmp/.uv-cache"
+    # 1.13.x 新增：Celery 任务注解 + 插件相关
+    - name: CELERY_TASK_ANNOTATIONS
+      value: "null"
+    - name: PLUGIN_DAEMON_TIMEOUT
+      value: "600.0"
+    - name: PLUGIN_MODEL_SCHEMA_CACHE_TTL
+      value: "3600"
+    # 1.13.x 新增：HITL 人工输入超时检查
+    - name: ENABLE_HUMAN_INPUT_TIMEOUT_TASK
+      value: "true"
+    - name: HUMAN_INPUT_TIMEOUT_TASK_INTERVAL
+      value: "1"
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
@@ -432,6 +486,17 @@ beat:
       value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "false"
+    # 1.13.x 新增：uv 包管理器缓存目录
+    - name: UV_CACHE_DIR
+      value: "/tmp/.uv-cache"
+    # 1.13.x 新增：Celery 任务注解
+    - name: CELERY_TASK_ANNOTATIONS
+      value: "null"
+    # 1.13.x 新增：HITL 人工输入超时检查
+    - name: ENABLE_HUMAN_INPUT_TIMEOUT_TASK
+      value: "true"
+    - name: HUMAN_INPUT_TIMEOUT_TASK_INTERVAL
+      value: "1"
     # 自动删除日志
     # Enable automatic cleanup of workflow run logs to manage database size
     - name: WORKFLOW_LOG_CLEANUP_ENABLED
@@ -706,6 +771,10 @@ pluginDaemon:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
+    # 1.13.x 升级踩坑：云 RDS 强制 SSL，pgx 默认 disable 必须显式开启
+    # （海外 AWS RDS / 国内阿里云 RDS 都是这个坑，不加这行 plugin-daemon 起不来）
+    - name: DB_SSL_MODE
+      value: "require"
     - name: PIP_MIRROR_URL
       value: "https://mirrors.aliyun.com/pypi/simple/"
     # PluginDaemon 数据库连接池（3 Pod，每 Pod 20+10=30 峰值 = 90 连接）

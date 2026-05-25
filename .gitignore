@@ -18,3 +18,5 @@ config.yaml
 *.tmp
 *.log
 .DS_Store
+
+dify-1.13.3

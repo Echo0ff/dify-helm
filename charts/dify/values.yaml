@@ -2,13 +2,48 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+global:
+  # The edition of the application, SELF_HOSTED or CLOUD
+  edition: "SELF_HOSTED"
+  # A secret key that is used for securely signing the session cookie and encrypting sensitive information on the database. You can generate a strong key using `openssl rand -base64 42`.
+  appSecretKey: "sk-9f73s3ljTXVcMT3Blb3ljTqtsKiGHXVcMT3BlbkFJLK7U"
+  # A global secret key for all inter-component API calls among Dify containers (e.g. `api`, `sandbox` and `pluginDaemon`). You can generate a strong key using `openssl rand -base64 42`.
+  # Takes no effect when left empty. Can be overridden by component-specific values.
+  internalApiKey: ""
+  # The backend domain of the console API, used to concatenate the authorization callback.
+  # If empty, it is the same domain. Example: console.dify.ai
+  consoleApiDomain: ""
+  # The front-end domain of the console web, used to concatenate some front-end addresses and for CORS configuration use.
+  # If empty, it is the same domain. Example: console.dify.ai
+  consoleWebDomain: ""
+  # Service API domain, used to display Service API Base Url to the front-end.
+  # If empty, it is the same domain. Example: api.dify.ai
+  serviceApiDomain: ""
+  # WebApp API backend domain, used to declare the back-end URL for the front-end API.
+  # If empty, it is the same domain. Example: app.dify.ai
+  appApiDomain: ""
+  # WebApp domain, used to display WebAPP API Base Url to the front-end. If empty, it is the same domain. Example: app.dify.ai
+  appWebDomain: ""
+  # File preview or download domain, used to display the file preview
+  # or download URL to the front-end or as a multi-modal model input;
+  # In order to prevent others from forging, the image preview URL is signed and has a 5-minute expiration time.
+  filesDomain: ""
+  marketplace:
+    enabled: true
+    url: "https://marketplace.dify.ai"
+    apiUrl: "https://marketplace.dify.ai"
+    # Takes effect only if built-in `nginx` were enabled
+    # If enabled, route marketplace api call to built-in `nginx` and strip headers for tracking.
+    # https://github.com/BorisPolonsky/dify-helm/pull/131
+    apiProxyEnabled: false
+
 ## @section Dify image parameters
 ##
 
 image:
   api:
     repository: langgenius/dify-api
-    tag: "1.10.1"
+    tag: "1.12.1"
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -19,7 +54,7 @@ image:
 
   web:
     repository: langgenius/dify-web
-    tag: "1.10.1"
+    tag: "1.12.1"
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -63,7 +98,7 @@ image:
 
   pluginDaemon:
     repository: langgenius/dify-plugin-daemon
-    tag: 0.4.1-local
+    tag: 0.5.3-local
     pullPolicy: IfNotPresent
     ## Optionally specify an array of imagePullSecrets.
     ## Secrets must be manually created in the namespace.
@@ -124,6 +159,10 @@ api:
   customReadinessProbe: {}
   ## @param api.customStartupProbe Custom startupProbe that overrides the default one
   customStartupProbe: {}
+  ## @param api.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   ## Configure Pods Security Context
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
   ## @param api.podSecurityContext.enabled Enabled Dify api pod's Security Context
@@ -208,27 +247,6 @@ api:
     clusterIP: ""
   # The log level for the application. Supported values are `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
   logLevel: INFO
-  url:
-    # The backend URL of the console API, used to concatenate the authorization callback.
-    # If empty, it is the same domain. Example: https://api.console.dify.ai
-    consoleApi: ""
-    # The front-end URL of the console web, used to concatenate some front-end addresses and for CORS configuration use.
-    # If empty, it is the same domain. Example: https://console.dify.ai
-    consoleWeb: ""
-    # Service API URL, used to display Service API Base URL to the front-end.
-    # If empty, it is the same domain. Example: https://api.dify.ai
-    serviceApi: ""
-    # WebApp API backend URL, used to declare the back-end URL for the front-end API.
-    # If empty, it is the same domain. Example: https://app.dify.ai
-    appApi: ""
-    # WebApp URL, used to display WebAPP API Base URL to the front-end. If empty, it is the same domain. Example: https://api.app.dify.ai
-    appWeb: ""
-    # File preview or download URL prefix, used to display the file preview
-    # or download URL to the front-end or as a multi-modal model input;
-    # In order to prevent others from forging, the image preview URL is signed and has a 5-minute expiration time.
-    files: ""
-    marketplaceApi: "https://marketplace.dify.ai"
-    marketplace: "https://marketplace.dify.ai"
   mail:
     # default email sender from email address, if not given a specific address
     defaultSender: "YOUR EMAIL FROM (e.g.: no-reply <no-reply@dify.ai>)"
@@ -250,8 +268,6 @@ api:
         optimistic: false
   # When enabled, migrations will be executed prior to application startup and the application will start after the migrations have completed.
   migration: true
-  # A secret key that is used for securely signing the session cookie and encrypting sensitive information on the database. You can generate a strong key using `openssl rand -base64 42`.
-  secretKey: "sk-9f73s3ljTXVcMT3Blb3ljTqtsKiGHXVcMT3BlbkFJLK7U"
   ## Storage for `api` and `worker`
   ## Ignored if `.Values.externalS3.enabled` is true
   ##
@@ -272,6 +288,12 @@ api:
       accessModes: ReadWriteMany
       size: 5Gi
       subPath: ""
+  ## @param api.extraVolumes Optionally specify extra list of additional volumes for the API pod(s)
+  ##
+  extraVolumes: []
+  ## @param api.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the API container(s)
+  ##
+  extraVolumeMounts: []
   ## Dify API ServiceAccount configuration
   ##
   serviceAccount:
@@ -314,6 +336,10 @@ worker:
   ## @param worker.updateStrategy Update strategy type and configuration parameters
   ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
   updateStrategy: {}
+  ## @param worker.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   ## Configure Pods Security Context
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
   ## @param worker.podSecurityContext.enabled Enabled Dify worker pod's Security Context
@@ -345,6 +371,12 @@ worker:
   #        key: DB_PASSWORD
 
   logLevel: INFO
+  ## @param worker.extraVolumes Optionally specify extra list of additional volumes for the worker pod(s)
+  ##
+  extraVolumes: []
+  ## @param worker.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the worker container(s)
+  ##
+  extraVolumeMounts: []
   ## Dify Worker ServiceAccount configuration
   ##
   serviceAccount:
@@ -381,6 +413,10 @@ beat:
   ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
   updateStrategy:
     type: Recreate
+  ## @param beat.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   ## Configure Pods Security Context
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
   ## @param beat.podSecurityContext.enabled Enabled Dify Celery Beat pod's Security Context
@@ -403,6 +439,12 @@ beat:
   # - name: ENABLE_CLEAN_EMBEDDING_CACHE_TASK
   #   value: "false"
   logLevel: INFO
+  ## @param beat.extraVolumes Optionally specify extra list of additional volumes for the beat pod(s)
+  ##
+  extraVolumes: []
+  ## @param beat.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the beat container(s)
+  ##
+  extraVolumeMounts: []
   ## celery beat ServiceAccount configuration
   ##
   serviceAccount:
@@ -438,13 +480,32 @@ proxy:
   customStartupProbe: {}
   ## @param proxy.clientMaxBodySize Custom client_max_body_size param nginx default: 15m
   clientMaxBodySize: ""
+  ## @param proxy.workerProcesses Number of worker processes for nginx. Set to 'auto' (string) to automatically detect the number of available CPUs, or specify an integer (e.g., 4) for a fixed number of worker processes.
+  workerProcesses: "auto"
   ## @param proxy.updateStrategy Update strategy type and configuration parameters
   ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
   updateStrategy: {}
-  # Configure Pods Security Context
-  podSecurityContext: {}
-  # Configure Container Security Context
-  containerSecurityContext: {}
+  ## @param proxy.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
+  ## Configure Pods Security Context
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+  ## @param proxy.podSecurityContext.enabled Enabled Dify proxy pod's Security Context
+  ## @param proxy.podSecurityContext.fsGroup Set Dify proxy pod's Security Context fsGroup
+  ##
+  podSecurityContext:
+    enabled: true
+    fsGroup: 101
+    fsGroupChangePolicy: "Always"
+  ## Configure Container Security Context
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+  ## @param proxy.containerSecurityContext.enabled Dify proxy containers' Security Context
+  ## @param proxy.containerSecurityContext.runAsUser Set Dify proxy containers' Security Context runAsUser
+  ##
+  containerSecurityContext:
+    enabled: true
+    runAsUser: 101
   extraEnv:
   # Apply your own Environment Variables if necessary
   # - name: LANG
@@ -471,6 +532,12 @@ proxy:
         accessModes: ReadWriteMany
         size: 1Gi
         subPath: ""
+  ## @param proxy.extraVolumes Optionally specify extra list of additional volumes for the proxy pod(s)
+  ##
+  extraVolumes: []
+  ## @param proxy.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the proxy container(s)
+  ##
+  extraVolumeMounts: []
   ## Proxy ServiceAccount configuration
   ##
   serviceAccount:
@@ -537,14 +604,16 @@ web:
   customReadinessProbe: {}
   ## @param web.customStartupProbe Custom startupProbe that overrides the default one
   customStartupProbe: {}
+  ## @param web.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   # Configure Pods Security Context
   podSecurityContext: {}
   # Configure Container Security Context
   containerSecurityContext: {}
-  extraEnv:
   # Apply your own Environment Variables if necessary
-  - name: EDITION
-    value: "SELF_HOSTED"
+  extraEnv: []
   service:
     port: 3000
     annotations: {}
@@ -569,6 +638,12 @@ web:
   ## @param web.enableServiceLinks Disable this feature if additional environment variables would lead to `E2BIG` errors in case frontend were managed by `pm2`
   ##
   enableServiceLinks: false
+  ## @param web.extraVolumes Optionally specify extra list of additional volumes for the web pod(s)
+  ##
+  extraVolumes: []
+  ## @param web.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the web container(s)
+  ##
+  extraVolumeMounts: []
 
 sandbox:
   enabled: true
@@ -619,6 +694,10 @@ sandbox:
   customReadinessProbe: {}
   ## @param sandbox.customStartupProbe Custom startupProbe that overrides the default one
   customStartupProbe: {}
+  ## @param sandbox.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   # Configure Pods Security Context
   podSecurityContext: {}
   # Configure Container Security Context
@@ -629,22 +708,21 @@ sandbox:
   #   value: "C.UTF-8"
   - name: WORKER_TIMEOUT
     value: "15"
-  ## @param sandbox.persistence.enabled Use volumes to persist data
+  ## @param sandbox.extraVolumes Optionally specify extra list of additional volumes for the Sandbox pod(s)
   ##
-  persistence:
-    enabled: false
-    ## @param sandbox.persistence.volumes Optionally specify extra list of additional volumes for the Sandbox pod(s)
-    ##
-    volumes: []
-    ## @param sandbox.persistence.volumeMounts Optionally specify extra list of additional volumeMounts for the Sandbox container(s)
-    ##
-    volumeMounts: []
+  extraVolumes: []
+  ## @param sandbox.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the Sandbox container(s)
+  ##
+  extraVolumeMounts: []
   service:
     port: 8194
     annotations: {}
     labels: {}
     clusterIP: ""
   auth:
+    ## @param sandbox.auth.apiKey API key for sandbox code execution service. You can generate a strong key using `openssl rand -base64 42`.
+    ## If not set, uses global.internalApiKey
+    ##
     apiKey: "dify-sandbox"
 
   ## Sandbox ServiceAccount configuration
@@ -683,6 +761,10 @@ ssrfProxy:
   ## @param ssrfProxy.updateStrategy Update strategy type and configuration parameters
   ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
   updateStrategy: {}
+  ## @param ssrfProxy.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   # Configure Pods Security Context
   podSecurityContext: {}
   # Configure Container Security Context
@@ -713,6 +795,12 @@ ssrfProxy:
         accessModes: ReadWriteMany
         size: 1Gi
         subPath: ""
+  ## @param ssrfProxy.extraVolumes Optionally specify extra list of additional volumes for the ssrfProxy pod(s)
+  ##
+  extraVolumes: []
+  ## @param ssrfProxy.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the ssrfProxy container(s)
+  ##
+  extraVolumeMounts: []
   service:
     port: 3128
     annotations: {}
@@ -754,6 +842,10 @@ pluginDaemon:
   ## @param pluginDaemon.updateStrategy Update strategy type and configuration parameters
   ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
   updateStrategy: {}
+  ## @param pluginDaemon.hostAliases Add deployment host aliases
+  ## https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/
+  ##
+  hostAliases: []
   # Configure Pods Security Context
   podSecurityContext: {}
   # Configure Container Security Context
@@ -772,8 +864,15 @@ pluginDaemon:
     labels: {}
     clusterIP: ""
   auth:
+    ## @param pluginDaemon.auth.serverKey Secret key for plugin daemon server authentication.
+    ## You can generate a strong key using `openssl rand -base64 42`.
+    ## If not set, uses global.internalApiKey
+    ##
     serverKey: "lYkiYYT6owG+71oLerGzA7GXCgOT++6ovaezWAjpCjf+Sjc3ZtU+qUEi"
-    # A separate key for interactions between `api`(`worker`) and `pluginDaemon`
+    ## @param pluginDaemon.auth.difyApiKey A separate key for interactions between `api`(`worker`) and `pluginDaemon`.
+    ## You can generate a strong key using `openssl rand -base64 42`.
+    ## If not set, uses global.internalApiKey
+    ##
     difyApiKey: "QaHbTe77CtuXmsfyhR7+vRjI/+XbV1AaFy691iy+kGDv2Jvy0/eAh8Y1"
   ## Storage for `pluginDaemon`
   ## Ignored if external object storage were configured via `.Values.externalS3` sections.
@@ -795,12 +894,12 @@ pluginDaemon:
       accessModes: ReadWriteMany
       size: 5Gi
       subPath: ""
-  marketplace:
-    enabled: true
-    # Takes effect only if built-in `nginx` were enabled
-    # If enabled, route marketplace api call to built-in `nginx` and strip headers for tracking.
-    # https://github.com/BorisPolonsky/dify-helm/pull/131
-    apiProxyEnabled: false
+  ## @param pluginDaemon.extraVolumes Optionally specify extra list of additional volumes for the pluginDaemon pod(s)
+  ##
+  extraVolumes: []
+  ## @param pluginDaemon.extraVolumeMounts Optionally specify extra list of additional volumeMounts for the pluginDaemon container(s)
+  ##
+  extraVolumeMounts: []
   ## pluginDaemon ServiceAccount configuration
   ##
   serviceAccount:

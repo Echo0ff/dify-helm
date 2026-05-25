@@ -1,0 +1,85 @@
+# ingress-nginx controller values for k3s (traefik disabled)
+#
+# 安装：
+#   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+#   helm repo update
+#   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+#     -n ingress-nginx --create-namespace \
+#     -f values-ingress-nginx.yaml
+#
+# 卸载：
+#   helm uninstall ingress-nginx -n ingress-nginx
+
+controller:
+  # 让该 controller 作为集群默认 IngressClass，dify Ingress 使用 nginx
+  ingressClassResource:
+    name: nginx
+    enabled: true
+    default: true
+    controllerValue: "k8s.io/ingress-nginx"
+  ingressClass: nginx
+
+  # 通过 LoadBalancer 暴露 80/443
+  # k3s 自带的 klipper-lb (servicelb) 会把端口绑定到每个节点的宿主机网络上
+  service:
+    enabled: true
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+    ports:
+      http: 80
+      https: 443
+
+  # 副本数：3 节点集群，先起 2 个，节点亲和分散
+  replicaCount: 2
+
+  # 资源限制（适配小型集群，可按需调大）
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # 反亲和：避免多个 controller 落到同一节点
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+                app.kubernetes.io/component: controller
+            topologyKey: kubernetes.io/hostname
+
+  # 允许调度到 control-plane 节点（你的 3 个节点全部是 control-plane）
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+
+  # 全局 Nginx 配置：放大 body size、超时（适配 Dify 插件 / 文件上传）
+  config:
+    proxy-body-size: "100m"
+    proxy-read-timeout: "600"
+    proxy-send-timeout: "600"
+    client-body-buffer-size: "1m"
+    use-forwarded-headers: "true"
+    enable-real-ip: "true"
+
+  # 关闭 admission webhook 失败时的硬阻断（可选，避免 controller 不可用时无法部署 ingress）
+  admissionWebhooks:
+    enabled: true
+    failurePolicy: Ignore
+
+  # 监控 metrics（如需 Prometheus，可设为 true）
+  metrics:
+    enabled: false
+
+# 关闭默认后端，节省资源；如需自定义 404 页面可启用
+defaultBackend:
+  enabled: false

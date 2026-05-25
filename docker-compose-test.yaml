@@ -1,0 +1,245 @@
+# ==================================================================
+# Dify 1.13.3 全新依赖测试栈 (无外部连接，用于版本稳定性验证)
+# 适用环境: 4C8G 单机
+# 包含: PostgreSQL 15 / Redis 7 / Qdrant / MinIO (S3 兼容)
+# ==================================================================
+# 资源预算 (4C8G):
+#   - PostgreSQL: 1.5G / 0.5 CPU
+#   - Redis:      0.5G / 0.25 CPU
+#   - Qdrant:     2.0G / 1.0 CPU
+#   - MinIO:      0.8G / 0.5 CPU
+#   - 合计:       ~4.8G / ~2.25 CPU (留约 3G / 1.75 CPU 给系统/Dify 主体)
+# ==================================================================
+# 使用方法:
+#   1. 启动: docker compose -f docker-compose-test.yaml up -d
+#   2. 查看: docker compose -f docker-compose-test.yaml ps
+#   3. 关闭: docker compose -f docker-compose-test.yaml down
+#   4. 清空: docker compose -f docker-compose-test.yaml down -v
+#
+# 默认凭据 (仅测试用, 生产环境请改):
+#   PostgreSQL : postgres / TestDifyPg!2025
+#   Redis      : (无 user) / TestDifyRedis!2025
+#   Qdrant API : TestDifyQdrant!2025
+#   MinIO      : difyminio / TestDifyMinio!2025
+#   MinIO 桶   : ai-dify (自动创建)
+#
+# 对应 values-secrets.yaml 的填写示例:
+#   externalPostgres.address    : <主机 IP>
+#   externalPostgres.port       : 5432
+#   externalPostgres.username   : postgres
+#   externalPostgres.password   : TestDifyPg!2025
+#   externalPostgres.database.api          : dify
+#   externalPostgres.database.pluginDaemon : dify_plugin
+#
+#   externalRedis.host          : <主机 IP>
+#   externalRedis.port          : 6379
+#   externalRedis.password      : TestDifyRedis!2025
+#   externalRedis.useSSL        : false
+#
+#   externalQdrant.endpoint     : http://<主机 IP>:6333
+#   externalQdrant.apiKey       : TestDifyQdrant!2025
+#   externalQdrant.grpc.enabled : false   (HTTP 6333 已足够测试)
+#
+#   externalS3.endpoint         : http://<主机 IP>:9000
+#   externalS3.accessKey        : difyminio
+#   externalS3.secretKey        : TestDifyMinio!2025
+#   externalS3.region           : us-east-1   (MinIO 默认)
+#   externalS3.bucketName.api          : ai-dify
+#   externalS3.bucketName.pluginDaemon : ai-dify
+#   externalS3.pathStyle        : true        (MinIO 必须 true)
+#   externalS3.useIAM           : false
+# ==================================================================
+
+services:
+  # -------------------------------------------------------------
+  # PostgreSQL: Dify 主库 + Plugin Daemon 库
+  # -------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: dify-test-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: TestDifyPg!2025
+      POSTGRES_DB: dify
+      # 性能调优参数 (针对 1.5G 容器)
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=384MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "max_wal_size=1GB"
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./volumes/test/postgres/data:/var/lib/postgresql/data
+      - ./volumes/test/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dify"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - dify-test
+    mem_limit: 1536m
+    mem_reservation: 512m
+    cpus: 0.5
+
+  # 自动创建 dify_plugin 数据库 (PostgreSQL 启动后只跑一次)
+  postgres-init:
+    image: postgres:15-alpine
+    container_name: dify-test-postgres-init
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: TestDifyPg!2025
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        set -e
+        echo "[init] ensuring database dify_plugin exists..."
+        psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='dify_plugin'" | grep -q 1 \
+          || psql -h postgres -U postgres -c "CREATE DATABASE dify_plugin"
+        echo "[init] done."
+    networks:
+      - dify-test
+
+  # -------------------------------------------------------------
+  # Redis: 缓存 + Celery broker
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: dify-test-redis
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--requirepass"
+      - "TestDifyRedis!2025"
+      - "--maxmemory"
+      - "384mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+      - "--appendonly"
+      - "yes"
+      - "--save"
+      - "60 1000"
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./volumes/test/redis/data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "TestDifyRedis!2025", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - dify-test
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.25
+
+  # -------------------------------------------------------------
+  # Qdrant: 向量数据库
+  # -------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    container_name: dify-test-qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: "TestDifyQdrant!2025"
+      QDRANT__SERVICE__HTTP_PORT: "6333"
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+      QDRANT__LOG_LEVEL: "INFO"
+      # 内存控制
+      QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS: "2"
+      QDRANT__STORAGE__OPTIMIZERS__MEMMAP_THRESHOLD_KB: "200000"
+    ports:
+      - "6333:6333"   # HTTP / REST
+      - "6334:6334"   # gRPC (若开启 grpc.enabled=true 才需要)
+    volumes:
+      - ./volumes/test/qdrant/storage:/qdrant/storage
+    healthcheck:
+      # Qdrant 镜像不带 curl, 用容器自带的 bash 探活 TCP
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - dify-test
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 1.0
+
+  # -------------------------------------------------------------
+  # MinIO: S3 兼容对象存储
+  # -------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: dify-test-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: difyminio
+      MINIO_ROOT_PASSWORD: TestDifyMinio!2025
+      MINIO_REGION_NAME: us-east-1
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # 控制台 UI
+    volumes:
+      - ./volumes/test/minio/data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - dify-test
+    mem_limit: 768m
+    mem_reservation: 256m
+    cpus: 0.5
+
+  # 自动创建 ai-dify bucket
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+    container_name: dify-test-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        set -e
+        echo "[init] configuring mc alias..."
+        mc alias set local http://minio:9000 difyminio 'TestDifyMinio!2025'
+        echo "[init] ensuring bucket ai-dify exists..."
+        mc mb --ignore-existing local/ai-dify
+        mc anonymous set download local/ai-dify || true
+        echo "[init] bucket ready."
+    networks:
+      - dify-test
+
+networks:
+  dify-test:
+    driver: bridge
+    name: dify-test
