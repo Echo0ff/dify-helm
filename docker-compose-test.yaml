@@ -58,9 +58,9 @@
 #   enabled: true
 #   uri: "http://<测试机内网 IP>:19530"
 #   database: "default"
-#   token: ""            # standalone 默认无 auth
-#   user: ""
-#   password: ""
+#   token: ""            # standalone 无 auth 时留空
+#   user: "root"         # ⚠️ Dify 不允许 user/password 全空,无 auth 也填占位值
+#   password: "Milvus"   # Milvus 未开鉴权时会忽略,仅过 Pydantic 校验
 #
 # # ⚠️ 测试期间用 MinIO 替代 OSS: externalOSS 关掉,启用 externalS3
 # externalOSS:

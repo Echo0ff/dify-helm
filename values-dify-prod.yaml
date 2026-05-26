@@ -744,10 +744,10 @@ pluginDaemon:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # 1.13.x 升级踩坑：云 RDS 强制 SSL，pgx 默认 disable 必须显式开启
-    # （海外 AWS RDS / 国内阿里云 RDS 都是这个坑，不加这行 plugin-daemon 起不来）
+    # 本地自建 PG (192.168.44.246) 未开启 TLS，使用 disable
+    # 若切换到云 RDS (AWS/阿里云) 强制 SSL，改为 "require"
     - name: DB_SSL_MODE
-      value: "require"
+      value: "disable"
     - name: PIP_MIRROR_URL
       value: "https://mirrors.aliyun.com/pypi/simple/"
     # PluginDaemon 数据库连接池（3 Pod，每 Pod 20+10=30 峰值 = 90 连接）
