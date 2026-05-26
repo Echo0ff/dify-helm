@@ -53,20 +53,19 @@ api:
   # autoscaling:
   #   enabled: false
 
-  # 【正常运行】国内集群 9 副本 + HPA（min 9 / max 18）
-  replicas: 9
+  # 【正常运行】新集群 16C32G×3:api 起步 4 副本 + HPA(min 4 / max 10)
+  # 容量评估:100 RPS 单 pod ~20 RPS,4 副本即可承接,HPA 上限 10 防内存挤爆 pluginDaemon
+  replicas: 4
 
 
-  # 资源配置（基于实测：CPU ~250m，MEM ~1.3Gi）
-  # 策略：requests 按实际 2 倍预留，limits 保持不变给突发空间
-  # 降低 requests 的目的：释放调度空间，让 HPA 能扩出更多 Pod
+  # 资源配置（单 Pod 实测 CPU ~250m / MEM ~1.3Gi）
   resources:
     requests:
-      cpu: "1000m"       # 2000m→1000m（实测250m，4倍预留）
-      memory: "2Gi"     # 4Gi→2Gi（实测1.3Gi，1.5倍预留）
+      cpu: "1000m"
+      memory: "2Gi"
     limits:
-      cpu: "4000m"      # 6000m→4000m（突发上限，仍有余量）
-      memory: "4Gi"     # 6Gi→4Gi（实测最高1.7Gi，充足上限）
+      cpu: "4000m"
+      memory: "4Gi"
 
   # 自定义 prompts
   persistence:
@@ -80,54 +79,53 @@ api:
         mountPath: /app/api/core/llm_generator/prompts.py
         subPath: prompts.py
         readOnly: true
-  
-  # 启用水平自动伸缩（HPA）- 针对对话流优化
+
+  # 启用水平自动伸缩(HPA)
   autoscaling:
     enabled: true
-    minReplicas: 9            # 9→9（实测12个Pod才用12%CPU，9个足够日常）
-    maxReplicas: 18          # 12→20（10倍流量需要约20-25个Pod的扩容空间）
-    targetCPUUtilizationPercentage: 60
-    targetMemoryUtilizationPercentage: 70
-  
-  # 优化健康检查 - 更宽容的配置，减少状态错误
+    minReplicas: 4            # 100 RPS 需 ~5 pod,4 起步 + HPA 弹一档兜住
+    maxReplicas: 10           # 上限 10:防内存峰值挤压 pluginDaemon(36→24Gi 已释放余量)
+    targetCPUUtilizationPercentage: 70    # 70% 扩容(原 60% 太敏感,瞬时尖峰过度扩容)
+    targetMemoryUtilizationPercentage: 75
+
+  # 优化健康检查
   livenessProbe:
     enabled: true
-    initialDelaySeconds: 45     # 增加初始延迟，等待应用完全启动
-    periodSeconds: 30           # 降低检查频率，减少开销
-    timeoutSeconds: 20          # 增加超时时间，避免瞬时高负载误判
-    failureThreshold: 12        # 更宽容，12 次失败才重启（减少误杀）
+    initialDelaySeconds: 45
+    periodSeconds: 30
+    timeoutSeconds: 20
+    failureThreshold: 12
     successThreshold: 1
-  
+
   readinessProbe:
     enabled: true
-    initialDelaySeconds: 20     # 增加初始延迟，确保应用准备好
+    initialDelaySeconds: 20
     periodSeconds: 10
-    timeoutSeconds: 20          # 增加超时时间
-    failureThreshold: 8         # 更宽容，8 次失败才标记不健康（减少状态错误）
-    successThreshold: 1         # 1 次成功即可接入流量（加快恢复）
-  
-  # 滚动更新策略 - 增加 surge 以快速响应流量增长
+    timeoutSeconds: 20
+    failureThreshold: 8
+    successThreshold: 1
+
+  # 滚动更新策略
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 3               # 一次最多增加 3 个 Pod（原 1）
-      maxUnavailable: 0         # 确保零停机
-  
-  # Pod 拓扑分散约束：均匀分布，但允许高性能节点承担更多负载
+      maxSurge: 1               # 滚更时多 1 个 pod(原 3 会临时多占 6Gi 内存)
+      maxUnavailable: 0
+
+  # Pod 拓扑分散:3 节点上严格均匀
   topologySpreadConstraints:
-    - maxSkew: 2                  # 允许最多 2 个 Pod 的差异（高性能节点可多 2 个）
+    - maxSkew: 1                  # 3 节点上 maxSkew=1 严格均匀;原 2 等于无约束
       topologyKey: kubernetes.io/hostname
-      whenUnsatisfiable: ScheduleAnyway  # HA 集群，保证可用性优先
+      whenUnsatisfiable: ScheduleAnyway
       labelSelector:
         matchLabels:
           component: api
-  
-  # 亲和性配置：优先利用高性能节点，均衡使用标准节点
+
+  # 亲和性:新集群无 node-type label,只保留 podAntiAffinity 适度分散
   affinity:
-    # Pod 反亲和性：适度分散，允许高密度部署
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 20              # 低权重，允许同节点多 Pod（HA 集群更灵活）
+        - weight: 20              # 低权重,允许同节点多 Pod
           podAffinityTerm:
             labelSelector:
               matchExpressions:
@@ -136,26 +134,6 @@ api:
                   values:
                     - api
             topologyKey: kubernetes.io/hostname
-    
-    # 节点调度策略：高性能节点优先，标准节点均衡
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        # 最高优先级：高性能节点（32C/120G）
-        - weight: 100
-          preference:
-            matchExpressions:
-              - key: node-type
-                operator: In
-                values:
-                  - high-performance
-        # 次优先级：标准节点（16C/32G）
-        - weight: 50
-          preference:
-            matchExpressions:
-              - key: node-type
-                operator: In
-                values:
-                  - standard
   
   # 保持现有环境变量配置
   logLevel: INFO  # 生产环境建议 INFO，减少日志开销（DEBUG 会影响性能）
@@ -332,25 +310,7 @@ worker:
                   values:
                     - worker
             topologyKey: kubernetes.io/hostname
-    
-    # 节点调度策略：优先高性能节点（处理异步任务更快）
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 80              # 高性能节点
-          preference:
-            matchExpressions:
-              - key: node-type
-                operator: In
-                values:
-                  - high-performance
-        - weight: 50              # 标准节点
-          preference:
-            matchExpressions:
-              - key: node-type
-                operator: In
-                values:
-                  - standard
-  
+
   logLevel: INFO
   
   extraEnv:
@@ -535,8 +495,8 @@ beat:
 ###################################
 web:
   enabled: true
-  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
-  
+  replicas: 2                   # 新集群下调:2 副本 + HPA(原 3 副本静态前端浪费)
+
   resources:
     requests:
       cpu: "500m"
@@ -544,11 +504,11 @@ web:
     limits:
       cpu: "1000m"
       memory: "1Gi"
-  
+
   autoscaling:
     enabled: true
-    minReplicas: 3              # 最少 3 个（3节点HA，每节点1个）
-    maxReplicas: 6              # 最多 6 个（扩容时每节点2个）
+    minReplicas: 2
+    maxReplicas: 4
     targetCPUUtilizationPercentage: 70
   
   updateStrategy:
@@ -585,21 +545,21 @@ web:
 ###################################
 sandbox:
   enabled: true
-  replicas: 5                   # 3 个副本（3节点HA，每节点1个，提高可用性）
-  
+  replicas: 2                   # 新集群下调:代码节点流量小,2 起步 + HPA 扩到 6 充足
+
   resources:
     requests:
-      cpu: "1000m"               # 2000m→500m（实测130m，4倍预留）
-      memory: "2Gi"             # 保持（部分Pod接近2Gi）
+      cpu: "500m"               # 1000m→500m:释放调度空间(limits 不变保突发)
+      memory: "1Gi"             # 2Gi→1Gi
     limits:
-      cpu: "4000m"              # 保持（代码执行突发高）
-      memory: "6Gi"             # 保持（已有Pod用到3Gi）
-  
+      cpu: "4000m"
+      memory: "6Gi"
+
   autoscaling:
     enabled: true
-    minReplicas: 5              # 最少 3 个（3节点HA，每节点1个）
-    maxReplicas: 8              # 最多 6 个（扩容时每节点2个）
-    targetCPUUtilizationPercentage: 60
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70    # 60→70:减少瞬时尖峰扩容
   
   updateStrategy:
     type: RollingUpdate
@@ -633,7 +593,7 @@ sandbox:
 ###################################
 proxy:
   enabled: true
-  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  replicas: 2                   # 新集群下调:2 副本足够(nginx 转发轻量)
   
   resources:
     requests:
@@ -676,7 +636,7 @@ proxy:
 ###################################
 ssrfProxy:
   enabled: true
-  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
+  replicas: 2                   # 新集群下调:2 副本足够
   
   resources:
     requests:
@@ -703,18 +663,20 @@ ssrfProxy:
 ###################################
 pluginDaemon:
   enabled: true
-  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
-  
-  # 资源配置（基于实测：CPU ~350m，MEM ~11Gi — 143个插件进程）
-  # ⚠️ 内存由插件数量决定，非流量驱动。10倍流量不会增加内存，但当前已接近上限。
-  # 强烈建议清理重复版本插件以降低内存（可释放3-4Gi）
+  # ⚠️ 内存预算关键调整:从 3 副本 → 2 副本,节省 12Gi 内存(36Gi→24Gi)
+  # 取舍:仅容忍 1 个副本故障(原 3 副本可容忍 2 个);滚动更新同一时间仅 1 个 pod 上下线
+  # 理由:新集群 96G 总内存,pluginDaemon 12Gi×3=36Gi 占 40%,降到 2 副本释放给 HPA 弹性
+  replicas: 2
+
+  # 资源配置（实测:CPU ~350m，MEM ~11Gi — 143 个插件进程,内存由插件数量决定,非流量驱动）
+  # 强烈建议清理重复版本插件以降低内存（可释放 3-4Gi）
   resources:
     requests:
-      cpu: "1000m"               # 2000m→500m（实测350m）
-      memory: "12Gi"            # 实测11Gi，必须给够
+      cpu: "1000m"
+      memory: "12Gi"            # 实测 11Gi,必须给够
     limits:
-      cpu: "4000m"              # 6000m→4000m
-      memory: "16Gi"            # 给充足余量，防止插件增多后OOM
+      cpu: "4000m"
+      memory: "16Gi"            # 给充足余量,防止插件增多后 OOM
   
   # ========= 探针策略 =========
   # 实测数据（143个插件）：Pod 启动到 Ready 约 242 秒
@@ -847,39 +809,62 @@ tolerations:
 affinity: {}
 
 # ==============================================================================
-# 说明：
-# 1. API 服务是瓶颈，配置了 8 个基础副本，HPA 8-12 副本自动伸缩
-# 2. Worker 配置了 3 个基础副本，HPA 3-8 副本（闲时节省资源给API）
-# 3. 其他服务（Web/Sandbox/Proxy等）各 3 个副本（3节点HA，每节点1个）
-# 4. 使用 Pod 反亲和性将副本分散到不同节点，保证高可用
-# 5. API/Worker 优先调度到高性能节点（32C/120G），其他服务均衡分布
-# 6. 生产环境建议监控指标：
-#    - API Pod CPU/Memory 使用率（目标 <70%）
-#    - HPA 伸缩事件（观察扩缩容频率）
-#    - P99 响应时间（目标 <1s）
-#    - 错误率（目标 <0.5%）
-#    - PostgreSQL 连接数（目标 <1000，保守配置峰值见下）
-# 7. 数据库连接数计算（保守配置 - 峰值）：
-#    - API: 8-12 Pod × 45 = 360-540 连接
-#    - Worker: 3-8 Pod × 60 = 180-480 连接
-#    - PluginDaemon: 3 Pod × 30 = 90 连接
-#    - Beat: 1 Pod × 15 = 15 连接
-#    - 总计峰值：645-1125 连接
-#    - 阿里云上限：1600 连接
-#    - 安全余量：475-955 连接（30%-60%缓冲）✅ 保守安全
-# 8. 并发控制策略（保守配置）：
-#    - API 线程数降低到 25（vs 45连接池 = 44%余量）
-#    - 单Pod连接池 vs 线程数：45连接 vs 25线程 = 20个缓冲
-#    - 确保即使高并发时也不会耗尽连接池
-#    - 牺牲部分并发性能换取系统稳定性
-# 9. 滚动更新策略：
-#    - PluginDaemon: 新Pod等待5分钟后才接入流量（等待编译完成）
-#    - API: 新Pod等待20秒后接入流量
-#    - maxUnavailable: 0 确保零停机部署
-# 
-# 使用方式：
+# 新集群配置说明（16C32G × 3 = 48C/96G,向量库 Milvus 已独立到集群外）
+# ==============================================================================
+#
+# 资源分配预算（requests 维度,常态）:
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ 组件           │ 副本 │ CPU req │ 内存 req │ 备注                       │
+# ├──────────────────────────────────────────────────────────────────────────┤
+# │ API            │ 4    │ 4000m   │ 8Gi      │ HPA 4-10                   │
+# │ Worker         │ 3    │ 1500m   │ 3Gi      │ HPA 3-8                    │
+# │ Beat           │ 1    │ 200m    │ 256Mi    │                            │
+# │ Web            │ 2    │ 1000m   │ 1Gi      │ HPA 2-4                    │
+# │ Sandbox        │ 2    │ 1000m   │ 2Gi      │ HPA 2-6                    │
+# │ Proxy          │ 2    │ 1000m   │ 512Mi    │                            │
+# │ SSRF Proxy     │ 2    │ 1000m   │ 2Gi      │                            │
+# │ Plugin Daemon  │ 2    │ 2000m   │ 24Gi     │ 内存硬需求（143 插件）     │
+# ├──────────────────────────────────────────────────────────────────────────┤
+# │ Dify 总计      │ -    │ ~11.7c  │ ~41Gi    │                            │
+# │ K8s 系统预留   │ -    │ ~4.5c   │ ~6Gi     │ 3 节点 × 1.5C/2G           │
+# │ 总常态         │ -    │ ~16.2c  │ ~47Gi    │ 占 34% / 49%               │
+# │ 集群可用       │ -    │ 48c     │ 96Gi     │                            │
+# │ HPA 余量       │ -    │ ~32c    │ ~49Gi    │ 给峰值扩容用               │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# HPA 峰值预算（API 10 / Sandbox 6 / Worker 8 / Web 4）:
+#   - API 峰值:     10 × 1C/2G   = 10C/20Gi（+6C/+12Gi）
+#   - Worker 峰值:   8 × 0.5C/1G = 4C/8Gi（+2.5C/+5Gi）
+#   - Sandbox 峰值:  6 × 0.5C/1G = 3C/6Gi（+2C/+4Gi）
+#   - Web 峰值:      4 × 0.5C/0.5G = 2C/2Gi（+1C/+1Gi）
+#   - 峰值合计:     ~23C / 63Gi（占集群 48% / 66%,健康水位）
+#
+# 数据库连接数预算（RDS max_connections = 3200,green 完全克隆 blue 配置）:
+#   - API:          10 Pod × 2 worker × (60+30) = 1800（HPA 峰值）
+#   - Worker:        8 Pod × (40+20)            = 480
+#   - PluginDaemon:  2 Pod × (20+10)            = 60
+#   - Beat:          1 Pod × (10+5)             = 15
+#   - 总计峰值:     ~2355 / 3200（74%,有 27% 余量,安全）
+#
+# 向量库（外部 Milvus,独立 docker）:
+#   - 启用方式（values-secrets.yaml）:
+#       externalMilvus.enabled: true
+#       externalMilvus.uri: "http://<milvus-host>:19530"
+#
+# 100 RPS 容量评估:
+#   - API 单 pod: 2 worker × 50 conn = 100 协程,假设 5s/请求 ≈ 20 RPS
+#   - 100 RPS 仅需 5 pod,4 起步 + HPA 一档即可,集群只用到约 50% 容量
+#   - 突发可弹至 10 pod,理论上限 ~200 RPS
+#
+# 关键监控指标:
+#   - API Pod CPU/Memory 使用率（目标 <70%）
+#   - HPA 伸缩事件（观察扩缩容频率）
+#   - PostgreSQL 连接数（目标 <2400）
+#   - Milvus QPS / 查询延迟
+#
+# 部署命令:
 # helm upgrade dify charts/dify -f values-dify.yaml -f values-secrets.yaml -f values-dify-prod.yaml -n dify
 # ==============================================================================
-# 
-# 注意：邮件配置请在 values-secrets.yaml 中配置（包含敏感信息）
+#
+# 注意:邮件配置请在 values-secrets.yaml 中配置（包含敏感信息）
 
