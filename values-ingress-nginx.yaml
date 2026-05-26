@@ -10,7 +10,25 @@
 # 卸载：
 #   helm uninstall ingress-nginx -n ingress-nginx
 
+# 国内 k3s 无法直连 registry.k8s.io，使用 daocloud 镜像
+# 注意：mirror 镜像 digest 与官方不同，必须清空 digest 字段，否则 containerd 校验失败回退到上游
+global:
+  image:
+    registry: k8s.m.daocloud.io
+
 controller:
+  image:
+    registry: k8s.m.daocloud.io
+    digest: ""
+    digestChroot: ""
+  admissionWebhooks:
+    enabled: true
+    failurePolicy: Ignore
+    patch:
+      image:
+        registry: k8s.m.daocloud.io
+        digest: ""
+
   # 让该 controller 作为集群默认 IngressClass，dify Ingress 使用 nginx
   ingressClassResource:
     name: nginx
@@ -70,11 +88,6 @@ controller:
     client-body-buffer-size: "1m"
     use-forwarded-headers: "true"
     enable-real-ip: "true"
-
-  # 关闭 admission webhook 失败时的硬阻断（可选，避免 controller 不可用时无法部署 ingress）
-  admissionWebhooks:
-    enabled: true
-    failurePolicy: Ignore
 
   # 监控 metrics（如需 Prometheus，可设为 true）
   metrics:
