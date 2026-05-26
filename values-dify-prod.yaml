@@ -266,23 +266,27 @@ api:
 ###################################
 worker:
   enabled: true
-  replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
-  
-  # 资源配置（实测 CPU ~3m / MEM ~370Mi 极低，知识库索引时 CPU/MEM 会突发）
+  # 1.13.x 重要变化:streaming workflow 全部下沉到 celery worker 执行
+  # 容量预算(日均 200 万请求, 流式:非流式 = 1:9):
+  #   - 流式约 20 万/天, 业务 8h 内峰值 ~20 RPS, SSE 平均 5-30s
+  #   - 同时在线流式任务 peak ≈ 200-300 个 → 单 pod 6 进程 × gevent 协程能撑 ~600
+  replicas: 4                   # 起步 4 副本承接均值
+
+  # 资源配置(streaming workflow 比纯异步索引重,需要更多 CPU/MEM)
   resources:
     requests:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
     limits:
-      cpu: "2000m"              # 知识库索引时 CPU 突发高
-      memory: "4Gi"             # 处理大文件时需要
-  
+      cpu: "2500m"              # streaming 时 graph engine 并行计算
+      memory: "5Gi"
+
   autoscaling:
     enabled: true
-    minReplicas: 3              # 最少 3 个（3节点HA，每节点1个）
-    maxReplicas: 8              # 最多 8 个（大量知识库索引时扩容）
-    targetCPUUtilizationPercentage: 75    # 75% 扩容（避免过早扩容浪费资源）
-    targetMemoryUtilizationPercentage: 80 # 80% 扩容
+    minReplicas: 4              # 起步 4 副本
+    maxReplicas: 10             # 峰值 10:足以撑 200-300 并发流式任务
+    targetCPUUtilizationPercentage: 60    # streaming 是 IO 密集,CPU 60% 早扩
+    targetMemoryUtilizationPercentage: 70
   
   updateStrategy:
     type: RollingUpdate
@@ -319,7 +323,7 @@ worker:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # Worker 数据库连接池（3-8 Pod × (40+20) = 180-480 连接）
+    # Worker 数据库连接池(4-10 Pod × (40+20) = 240-600 连接)
     - name: SQLALCHEMY_POOL_SIZE
       value: "40"
     - name: SQLALCHEMY_MAX_OVERFLOW
@@ -334,18 +338,19 @@ worker:
       value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "false"            # FIFO 模式
-    # Celery Worker（1.13.x：使用固定 CELERY_WORKER_AMOUNT，替代 CELERY_MAX_WORKERS / CELERY_MIN_WORKERS / CELERY_AUTO_SCALE）
+    # Celery Worker(1.13.x:使用固定 CELERY_WORKER_AMOUNT,替代 CELERY_MAX_WORKERS / CELERY_MIN_WORKERS / CELERY_AUTO_SCALE)
+    # 单 pod 总并发 = CELERY_WORKER_AMOUNT × gevent 协程,目标承接 streaming workflow
     - name: CELERY_WORKER_AMOUNT
-      value: "4"                # 4 个 gevent 协程进程（match 国内原 MAX_WORKERS）
+      value: "6"                # 单 pod 6 进程 × gevent 协程 ≈ 单 pod 600+ 并发任务
     - name: CELERY_WORKER_CLASS
-      value: "gevent"           # 使用 gevent worker
+      value: "gevent"           # gevent 协程,适合 LLM SSE 等 IO 等待
     - name: CELERY_PREFETCH_MULTIPLIER
-      value: "1"
+      value: "1"                # streaming 任务长,预取 1 避免抢任务不释放
     - name: MAX_TASKS_PER_CHILD
-      value: "100"              # 修正拼写：MAX_TASK_PRE_CHILD（typo）→ MAX_TASKS_PER_CHILD
-    # Redis（1.13.x：原 REDIS_POOL_SIZE / REDIS_POOL_MAX_CONNECTIONS 已失效）
+      value: "200"              # 200 个任务后 worker 重启,防内存泄漏;streaming 比索引任务长,提高重启间隔
+    # Redis(1.13.x:原 REDIS_POOL_SIZE / REDIS_POOL_MAX_CONNECTIONS 已失效)
     - name: REDIS_MAX_CONNECTIONS
-      value: "30"
+      value: "50"               # celery broker 走 redis,6 进程 × ~8 连接 = 48,留余量
     # 1.13.x 新增：SSE 事件总线（必须与 API 一致）
     - name: PUBSUB_REDIS_CHANNEL_TYPE
       value: "streams"
@@ -399,12 +404,13 @@ worker:
       value: "360"
     - name: CODE_EXECUTION_WRITE_TIMEOUT
       value: "10"
+    # Graph Engine 并行(worker 内部 streaming workflow 节点级并行)
     - name: GRAPH_ENGINE_MIN_WORKERS
-      value: "3"  # 增加初始并行 worker 数
+      value: "3"
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "5"  # 最大并行数
+      value: "8"                # streaming workflow 节点级并行,从 5 提到 8 应对流式高并发
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
-      value: "1"  # 降低扩容阈值，更快触发并行
+      value: "1"                # 降低扩容阈值,更快触发并行
 
 ###################################
 # Beat 服务（定时任务调度器）
@@ -811,39 +817,51 @@ affinity: {}
 # 新集群配置说明（16C32G × 3 = 48C/96G,向量库 Milvus 已独立到集群外）
 # ==============================================================================
 #
+# 流量假设(日均 200 万请求, 流式:非流式 = 1:9):
+#   - 流式(api 处理): 180 万/天, 业务 8h 峰值 ~150 RPS
+#   - 流式(worker 处理): 20 万/天, 业务 8h 峰值 ~20 RPS, SSE 5-30s
+#   - 同时在线流式任务 peak ≈ 200-300 个
+#
 # 资源分配预算（requests 维度,常态）:
 # ┌──────────────────────────────────────────────────────────────────────────┐
 # │ 组件           │ 副本 │ CPU req │ 内存 req │ 备注                       │
 # ├──────────────────────────────────────────────────────────────────────────┤
-# │ API            │ 4    │ 4000m   │ 8Gi      │ HPA 4-10                   │
-# │ Worker         │ 3    │ 1500m   │ 3Gi      │ HPA 3-8                    │
+# │ API            │ 4    │ 4000m   │ 8Gi      │ HPA 4-10, 非流式请求       │
+# │ Worker         │ 4    │ 4000m   │ 8Gi      │ HPA 4-10, streaming 等     │
 # │ Beat           │ 1    │ 200m    │ 256Mi    │                            │
 # │ Web            │ 2    │ 1000m   │ 1Gi      │ HPA 2-4                    │
 # │ Sandbox        │ 2    │ 1000m   │ 2Gi      │ HPA 2-6                    │
 # │ Proxy          │ 2    │ 1000m   │ 512Mi    │                            │
 # │ SSRF Proxy     │ 2    │ 1000m   │ 2Gi      │                            │
-# │ Plugin Daemon  │ 2    │ 2000m   │ 24Gi     │ 内存硬需求（143 插件）     │
+# │ Plugin Daemon  │ 2    │ 2000m   │ 24Gi     │ 内存硬需求(143 插件)       │
 # ├──────────────────────────────────────────────────────────────────────────┤
-# │ Dify 总计      │ -    │ ~11.7c  │ ~41Gi    │                            │
+# │ Dify 总计      │ -    │ ~14.2c  │ ~45.8Gi  │                            │
 # │ K8s 系统预留   │ -    │ ~4.5c   │ ~6Gi     │ 3 节点 × 1.5C/2G           │
-# │ 总常态         │ -    │ ~16.2c  │ ~47Gi    │ 占 34% / 49%               │
+# │ 总常态         │ -    │ ~18.7c  │ ~51.8Gi  │ 占 39% / 54%               │
 # │ 集群可用       │ -    │ 48c     │ 96Gi     │                            │
-# │ HPA 余量       │ -    │ ~32c    │ ~49Gi    │ 给峰值扩容用               │
+# │ HPA 余量       │ -    │ ~29c    │ ~44Gi    │ 给峰值扩容用               │
 # └──────────────────────────────────────────────────────────────────────────┘
 #
-# HPA 峰值预算（API 10 / Sandbox 6 / Worker 8 / Web 4）:
-#   - API 峰值:     10 × 1C/2G   = 10C/20Gi（+6C/+12Gi）
-#   - Worker 峰值:   8 × 0.5C/1G = 4C/8Gi（+2.5C/+5Gi）
-#   - Sandbox 峰值:  6 × 0.5C/1G = 3C/6Gi（+2C/+4Gi）
-#   - Web 峰值:      4 × 0.5C/0.5G = 2C/2Gi（+1C/+1Gi）
-#   - 峰值合计:     ~23C / 63Gi（占集群 48% / 66%,健康水位）
+# HPA 峰值预算（API 10 / Worker 10 / Sandbox 6 / Web 4）:
+#   - API 峰值:     10 × 1c/2Gi  = 10c/20Gi  (+6c/+12Gi)
+#   - Worker 峰值:  10 × 1c/2Gi  = 10c/20Gi  (+6c/+12Gi)  ← streaming 承载主力
+#   - Sandbox 峰值:  6 × 0.5c/1Gi = 3c/6Gi   (+2c/+4Gi)
+#   - Web 峰值:      4 × 0.5c/0.5Gi = 2c/2Gi (+1c/+1Gi)
+#   - 峰值合计:     ~30c / 79Gi (集群 63% / 82%, 健康)
+#   - 注:api/worker 不会同时打满 HPA (流式:非流式 = 1:9, 两者负载反相关)
 #
 # 数据库连接数预算（RDS max_connections = 3200,green 完全克隆 blue 配置）:
-#   - API:          10 Pod × 2 worker × (60+30) = 1800（HPA 峰值）
-#   - Worker:        8 Pod × (40+20)            = 480
+#   - API:          10 Pod × 2 worker × (60+30) = 1800 (HPA 峰值)
+#   - Worker:       10 Pod × (40+20)            = 600  (streaming 持连接)
 #   - PluginDaemon:  2 Pod × (20+10)            = 60
 #   - Beat:          1 Pod × (10+5)             = 15
-#   - 总计峰值:     ~2355 / 3200（74%,有 27% 余量,安全）
+#   - 总计峰值:     ~2475 / 3200 (77%, 有 23% 余量)
+#
+# Celery worker 并发模型(承接 streaming workflow):
+#   - 单 pod: CELERY_WORKER_AMOUNT=6 × gevent 协程 ≈ 600 任务理论上限
+#   - GRAPH_ENGINE_MAX_WORKERS=8: 每个 streaming workflow 内部节点级并行
+#   - MAX_TASKS_PER_CHILD=200: streaming 任务比索引长,重启间隔提高
+#   - 10 pod 峰值: 6000 并发槽位,远超 200-300 实际并发
 #
 # 向量库（外部 Milvus,独立 docker）:
 #   - 启用方式（values-secrets.yaml）:
