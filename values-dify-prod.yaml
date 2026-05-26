@@ -1,15 +1,19 @@
 # ============================================
-# Dify Helm Chart - 生产环境优化配置（国内公共集群 / Dify 1.13.3）
+# Dify Helm Chart - 生产环境配置（国内公共集群 / Dify 1.13.3）
 # ============================================
 # 说明：
 # - 本文件为国内公共集群生产配置（已升级至 1.13.3）
-# - 基于 values-dify.yaml，针对高 RPS 和高可用场景优化
+# - 目标容量：100+ RPS，4-10 副本 API 弹性扩缩
 # - 配合 values-secrets.yaml 使用
 #
-# 集群配置（3节点 HA 集群）:
-#   - Node 1: 32C/128G (high-performance) - 高性能节点，API/Worker 优先调度
-#   - Node 2: 16C/32G (standard) - 标准节点，均衡调度
-#   - Node 3: 16C/32G (standard) - 标准节点，均衡调度
+# 集群配置（3 节点同构 HA 集群）:
+#   - Node 1-3: 16C/32G（共 48C/96G，无 node-type 分级）
+#
+# 外部依赖（生产）:
+#   - PostgreSQL: 阿里云 RDS（max_connections=3200）
+#   - Redis:      阿里云 Redis
+#   - 向量库:     独立 Milvus（集群外 docker 部署）
+#   - 对象存储:   阿里云 OSS
 #
 # 部署命令：
 # helm upgrade dify ./charts/dify -n dify \
@@ -84,8 +88,8 @@ api:
   autoscaling:
     enabled: true
     minReplicas: 4            # 100 RPS 需 ~5 pod,4 起步 + HPA 弹一档兜住
-    maxReplicas: 10           # 上限 10:防内存峰值挤压 pluginDaemon(36→24Gi 已释放余量)
-    targetCPUUtilizationPercentage: 70    # 70% 扩容(原 60% 太敏感,瞬时尖峰过度扩容)
+    maxReplicas: 10           # 上限 10:平衡 100 RPS 容量与 HPA 峰值内存预算
+    targetCPUUtilizationPercentage: 70    # 70% 扩容,瞬时尖峰不会过度触发
     targetMemoryUtilizationPercentage: 75
 
   # 优化健康检查
@@ -109,12 +113,12 @@ api:
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1               # 滚更时多 1 个 pod(原 3 会临时多占 6Gi 内存)
+      maxSurge: 1               # 滚更只多 1 个 pod,控制临时内存占用
       maxUnavailable: 0
 
   # Pod 拓扑分散:3 节点上严格均匀
   topologySpreadConstraints:
-    - maxSkew: 1                  # 3 节点上 maxSkew=1 严格均匀;原 2 等于无约束
+    - maxSkew: 1                  # 严格均匀分布到 3 个节点
       topologyKey: kubernetes.io/hostname
       whenUnsatisfiable: ScheduleAnyway
       labelSelector:
@@ -167,19 +171,19 @@ api:
       value: "10"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # 优化 Gunicorn 配置（⚠️ 调整为接近1:1比例，解决QueuePool limit exceeded问题）
+    # Gunicorn 配置（SSE 长连接需要充足协程槽位）
     - name: SERVER_WORKER_AMOUNT
-      value: "2"                # 每个 Pod 2 个 worker
+      value: "2"                # 每个 Pod 2 个 worker 进程
     - name: SERVER_WORKER_CLASS
-      value: "gevent"           # 使用 gevent 异步 worker 提升并发能力
+      value: "gevent"           # 异步 worker 提升并发能力
     - name: SERVER_WORKER_CONNECTIONS
-      value: "50"               # ⚠️ 从100降到60，减少并发压力（9×2×60=1080协程）
+      value: "50"               # 单 worker 50 协程(单 pod 100 协程,4-10 pod = 400-1000 协程)
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池优化
-    # RDS idle_in_transaction_session_timeout 已改为 15min（2026-02-25）
-    # 连接数预算：每 Pod 2 worker × (60+30) = 180 连接
-    # 总量：10 Pod × 180 = 1800（API）+ Worker 480 + 其他 105 = 2385（上限 3200，余量 34%）
+    # 数据库连接池
+    # RDS idle_in_transaction_session_timeout 设为 15min（2026-02-25）
+    # 连接数预算：单 Pod 2 worker × (60+30) = 180 连接
+    # 峰值预算：API 10 × 180 + Worker 8 × (40+20) + Plugin 2 × (20+10) + Beat 15 ≈ 2355 / 3200（74%）
     - name: SQLALCHEMY_POOL_SIZE
       value: "60"               # 每 worker 进程 60 个常驻连接
     - name: SQLALCHEMY_MAX_OVERFLOW
@@ -189,7 +193,7 @@ api:
     - name: SQLALCHEMY_POOL_PRE_PING
       value: "true"             # checkout 时检查连接有效性
     - name: SQLALCHEMY_POOL_TIMEOUT
-      value: "30"               # 30 秒等不到连接就快速失败（原 120 秒太久）
+      value: "30"               # 30 秒等不到连接就快速失败
     - name: SQLALCHEMY_ECHO
       value: "false"
     - name: SQLALCHEMY_ECHO_POOL
@@ -197,7 +201,7 @@ api:
     - name: SQLALCHEMY_POOL_RESET_ON_RETURN
       value: "rollback"         # 归还连接时自动回滚未提交事务
     - name: SQLALCHEMY_POOL_USE_LIFO
-      value: "false"            # FIFO 模式：所有连接轮流使用，让 POOL_RECYCLE 有效淘汰旧连接
+      value: "false"            # FIFO 模式:让 POOL_RECYCLE 有效淘汰旧连接
     # Redis 连接（1.13.x：原 REDIS_POOL_SIZE/REDIS_POOL_MAX_CONNECTIONS/CELERY_BROKER_POOL_LIMIT 已失效）
     - name: REDIS_MAX_CONNECTIONS
       value: "60"               # 单 Pod 最大 60 个连接（峰值时使用）
@@ -266,15 +270,14 @@ worker:
   enabled: true
   replicas: 3                   # 3 个副本（3节点HA，每节点1个，提高可用性）
   
-  # 资源配置（基于实测：CPU ~3m，MEM ~370Mi）
-  # Worker 当前非常空闲，但知识库索引时会突发
+  # 资源配置（实测 CPU ~3m / MEM ~370Mi 极低，知识库索引时 CPU/MEM 会突发）
   resources:
     requests:
-      cpu: "500m"               # 1000m→500m（日常极低，4倍预留）
-      memory: "1Gi"             # 2Gi→1Gi（4倍预留）
+      cpu: "500m"
+      memory: "1Gi"
     limits:
-      cpu: "2000m"              # 保持（知识库索引时CPU突发高）
-      memory: "4Gi"             # 保持（处理大文件时需要）
+      cpu: "2000m"              # 知识库索引时 CPU 突发高
+      memory: "4Gi"             # 处理大文件时需要
   
   autoscaling:
     enabled: true
@@ -318,7 +321,7 @@ worker:
       value: "Asia/Shanghai"
     - name: LOG_TZ
       value: "Asia/Shanghai"
-    # Worker 数据库连接池（3-8 Pod × 60 = 180-480 连接）
+    # Worker 数据库连接池（3-8 Pod × (40+20) = 180-480 连接）
     - name: SQLALCHEMY_POOL_SIZE
       value: "40"
     - name: SQLALCHEMY_MAX_OVERFLOW
@@ -495,7 +498,7 @@ beat:
 ###################################
 web:
   enabled: true
-  replicas: 2                   # 新集群下调:2 副本 + HPA(原 3 副本静态前端浪费)
+  replicas: 2                   # 前端静态资源,2 副本 + HPA 扩到 4 足够
 
   resources:
     requests:
@@ -545,12 +548,12 @@ web:
 ###################################
 sandbox:
   enabled: true
-  replicas: 2                   # 新集群下调:代码节点流量小,2 起步 + HPA 扩到 6 充足
+  replicas: 2                   # 代码节点流量小,2 起步 + HPA 扩到 6
 
   resources:
     requests:
-      cpu: "500m"               # 1000m→500m:释放调度空间(limits 不变保突发)
-      memory: "1Gi"             # 2Gi→1Gi
+      cpu: "500m"               # 释放调度空间,limits 不变保代码节点突发
+      memory: "1Gi"
     limits:
       cpu: "4000m"
       memory: "6Gi"
@@ -593,7 +596,7 @@ sandbox:
 ###################################
 proxy:
   enabled: true
-  replicas: 2                   # 新集群下调:2 副本足够(nginx 转发轻量)
+  replicas: 2                   # nginx 转发轻量,2 副本足够
   
   resources:
     requests:
@@ -636,15 +639,15 @@ proxy:
 ###################################
 ssrfProxy:
   enabled: true
-  replicas: 2                   # 新集群下调:2 副本足够
-  
+  replicas: 2
+
   resources:
     requests:
       cpu: "500m"
-      memory: "1Gi"           # 提高到 1Gi
+      memory: "1Gi"
     limits:
-      cpu: "1000m"              # 提高到 1 核（原500m）
-      memory: "2Gi"             # 提高到 2Gi 避免OOMKilled
+      cpu: "1000m"
+      memory: "2Gi"             # 历史曾出过 OOM,留 2Gi 余量
   
   updateStrategy:
     type: RollingUpdate
@@ -663,20 +666,18 @@ ssrfProxy:
 ###################################
 pluginDaemon:
   enabled: true
-  # ⚠️ 内存预算关键调整:从 3 副本 → 2 副本,节省 12Gi 内存(36Gi→24Gi)
-  # 取舍:仅容忍 1 个副本故障(原 3 副本可容忍 2 个);滚动更新同一时间仅 1 个 pod 上下线
-  # 理由:新集群 96G 总内存,pluginDaemon 12Gi×3=36Gi 占 40%,降到 2 副本释放给 HPA 弹性
+  # 2 副本:容忍 1 个副本故障 + 滚动更新可零停机;内存预算 12Gi × 2 = 24Gi
   replicas: 2
 
-  # 资源配置（实测:CPU ~350m，MEM ~11Gi — 143 个插件进程,内存由插件数量决定,非流量驱动）
+  # 资源配置（实测 CPU ~350m / MEM ~11Gi,143 个插件进程;内存由插件数量决定,非流量驱动）
   # 强烈建议清理重复版本插件以降低内存（可释放 3-4Gi）
   resources:
     requests:
       cpu: "1000m"
-      memory: "12Gi"            # 实测 11Gi,必须给够
+      memory: "12Gi"
     limits:
       cpu: "4000m"
-      memory: "16Gi"            # 给充足余量,防止插件增多后 OOM
+      memory: "16Gi"            # 余量防插件增多后 OOM
   
   # ========= 探针策略 =========
   # 实测数据（143个插件）：Pod 启动到 Ready 约 242 秒
