@@ -71,18 +71,9 @@ api:
       cpu: "4000m"
       memory: "4Gi"
 
-  # 自定义 prompts
-  persistence:
-    enabled: true
-    volumes:
-      - name: custom-prompts
-        configMap:
-          name: dify-prompts
-    volumeMounts:
-      - name: custom-prompts
-        mountPath: /app/api/core/llm_generator/prompts.py
-        subPath: prompts.py
-        readOnly: true
+  # 自定义 prompts:1.13.x 起改用环境变量(SUGGESTED_QUESTIONS_PROMPT)注入,
+  # 不再挂载 ConfigMap 覆盖 /app/api/core/llm_generator/prompts.py
+  # 见下方 extraEnv 段
 
   # 启用水平自动伸缩(HPA)
   autoscaling:
@@ -171,6 +162,13 @@ api:
       value: "10"
     - name: LOG_TZ
       value: "Asia/Shanghai"
+    # 自定义"猜你想问"prompt(替代旧版 ConfigMap 挂载方案)
+    # 对应 dify 1.13.x: api/core/llm_generator/prompts.py 中的 SUGGESTED_QUESTIONS_AFTER_ANSWER_INSTRUCTION_PROMPT
+    - name: SUGGESTED_QUESTIONS_PROMPT
+      value: |
+        请帮我预测用户最可能问的三个问题，每个问题控制在20个字符以内。
+        确保你的输出语言与助手最新回复的语言保持一致。输出必须是JSON数组格式，遵循以下模式：
+        ["问题1","问题2","问题3"]
     # Gunicorn 配置（SSE 长连接需要充足协程槽位）
     - name: SERVER_WORKER_AMOUNT
       value: "2"                # 每个 Pod 2 个 worker 进程
