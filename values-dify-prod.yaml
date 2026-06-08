@@ -76,10 +76,14 @@ api:
   # 见下方 extraEnv 段
 
   # 启用水平自动伸缩(HPA)
+  # 2026-05-27 调整：实测峰值 CPU 157%/70% 已打满 10 副本，提升上限到 16
+  # 集群容量：3 × 16C/32G = 48C/96G；API 单 Pod limits 4C/4Gi，理论可放 12 Pod
+  # 实际还要给 plugin-daemon(2 × 16Gi)、sandbox(6 × 6Gi)、worker(4 × 4Gi) 留空间
+  # 20 副本峰值 = 20 × 1C req + plugin/sandbox/worker ≈ 50C，集群可承受
   autoscaling:
     enabled: true
     minReplicas: 4            # 100 RPS 需 ~5 pod,4 起步 + HPA 弹一档兜住
-    maxReplicas: 10           # 上限 10:平衡 100 RPS 容量与 HPA 峰值内存预算
+    maxReplicas: 15           # 2026-05-27: 10 → 20，峰值时 HPA 不再卡上限
     targetCPUUtilizationPercentage: 70    # 70% 扩容,瞬时尖峰不会过度触发
     targetMemoryUtilizationPercentage: 75
 
@@ -201,8 +205,12 @@ api:
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "false"            # FIFO 模式:让 POOL_RECYCLE 有效淘汰旧连接
     # Redis 连接（1.13.x：原 REDIS_POOL_SIZE/REDIS_POOL_MAX_CONNECTIONS/CELERY_BROKER_POOL_LIMIT 已失效）
+    # ⚠️ 注意：REDIS_MAX_CONNECTIONS 是【单 Python 进程】的 ConnectionPool 上限，不是单 Pod
+    # 单 Pod 实际池总量 = SERVER_WORKER_AMOUNT × REDIS_MAX_CONNECTIONS = 2 × 200 = 400
+    # 峰值预算（10 Pod API + 4 Pod Worker + Plugin/Beat）≈ 4700 / 10000 maxclients (47%)
+    # 之前 60 的设置在流式 Graph Engine 并行 worker 场景下会触发 MaxConnectionsError
     - name: REDIS_MAX_CONNECTIONS
-      value: "60"               # 单 Pod 最大 60 个连接（峰值时使用）
+      value: "200"              # 每进程 200 个连接，覆盖 50 协程 + 多 Graph Engine 并行线程
     # 1.13.x 新增：SSE 事件总线走 Redis Streams（at-least-once）
     - name: PUBSUB_REDIS_CHANNEL_TYPE
       value: "streams"
@@ -355,8 +363,10 @@ worker:
     - name: MAX_TASKS_PER_CHILD
       value: "200"              # 200 个任务后 worker 重启,防内存泄漏
     # Redis(1.13.x: 原 REDIS_POOL_SIZE / REDIS_POOL_MAX_CONNECTIONS 已失效)
+    # celery worker 单进程（gevent），20 greenlet × ~3 连接 + GRAPH_ENGINE_MAX_WORKERS=8 × 2 ≈ 76
+    # 给 2x 余量到 150，避免流式 streaming workflow 高峰期被打爆
     - name: REDIS_MAX_CONNECTIONS
-      value: "60"               # celery broker 走 redis,20 greenlet × ~3 连接 = 60
+      value: "150"              # 单 worker 进程 150 个连接，覆盖 celery + graph engine 并行
     # 1.13.x 新增：SSE 事件总线（必须与 API 一致）
     - name: PUBSUB_REDIS_CHANNEL_TYPE
       value: "streams"
@@ -571,7 +581,7 @@ sandbox:
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 12
     targetCPUUtilizationPercentage: 70    # 60→70:减少瞬时尖峰扩容
   
   updateStrategy:

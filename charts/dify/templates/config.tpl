@@ -675,6 +675,15 @@ http_access deny all
 ################################## Proxy Server ################################
 http_port 3128
 coredump_dir /var/spool/squid
+
+# Hide proxy hop information in responses.
+# Dify 1.13.x ssrf_proxy.py treats any 401/403 whose `Via` header contains "squid"
+# as an SSRF block, even when the upstream (e.g. OSS) is the real source of the 403.
+# Stripping Via / X-Forwarded-For prevents that false-positive without weakening
+# the actual SSRF protection (ACL-based access control is unchanged).
+via off
+forwarded_for off
+
 refresh_pattern ^ftp:		1440	20%	10080
 refresh_pattern ^gopher:	1440	0%	1440
 refresh_pattern -i (/cgi-bin/|\?) 0	0%	0
