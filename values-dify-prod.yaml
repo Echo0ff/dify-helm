@@ -68,8 +68,8 @@ api:
       cpu: "1000m"
       memory: "2Gi"
     limits:
-      cpu: "4000m"
-      memory: "4Gi"
+      cpu: "3500m"
+      memory: "5Gi"
 
   # 自定义 prompts:1.13.x 起改用环境变量(SUGGESTED_QUESTIONS_PROMPT)注入,
   # 不再挂载 ConfigMap 覆盖 /app/api/core/llm_generator/prompts.py
@@ -175,21 +175,26 @@ api:
         ["问题1","问题2","问题3"]
     # Gunicorn 配置（SSE 长连接需要充足协程槽位）
     - name: SERVER_WORKER_AMOUNT
-      value: "2"                # 每个 Pod 2 个 worker 进程
+      value: "3"                # 2→3：每 Pod 3 进程吃满 ~3 核，缓解 gevent 单进程队头阻塞(节点 CPU 有余量)
     - name: SERVER_WORKER_CLASS
       value: "gevent"           # 异步 worker 提升并发能力
     - name: SERVER_WORKER_CONNECTIONS
-      value: "50"               # 单 worker 50 协程(单 pod 100 协程,4-10 pod = 400-1000 协程)
+      value: "12"               # 36→12：单进程 HOL 队列深度收窄，缓解长尾；总并发靠 3 进程×15 Pod 横向承接
+    # 知识库检索线程池：不设默认 = os.cpu_count()(读宿主机节点核数，可能 16/32/64) → 每次检索过度开线程占连接
+    - name: RETRIEVAL_SERVICE_EXECUTORS
+      value: "4"                # 显式封顶，消除按节点核数放大连接/线程的隐患
     - name: GUNICORN_TIMEOUT
       value: "360"              # 超时 6 分钟（适合长时间运行的工作流）
-    # 数据库连接池
+    # 数据库连接池（配合 SERVER_WORKER_AMOUNT=3）
     # RDS idle_in_transaction_session_timeout 设为 15min（2026-02-25）
-    # 连接数预算：单 Pod 2 worker × (60+30) = 180 连接
-    # 峰值预算：API 10 × 180 + Worker 8 × (40+20) + Plugin 2 × (20+10) + Beat 15 ≈ 2355 / 3200（74%）
+    # 常驻基线：3 worker × 15 Pod × pool_size 40 = 1800（与 2×60 旧基线持平，不撑爆）
+    # 单进程上限 40+60=100；实测 checked_out 峰值仅 ~602，突发余量充足
+    # ⚠️ 理论峰值 3×15×100=4500 偏高，靠 QueuePool 报错=0 + RDS 总连接 监控兜底；
+    #    若 RDS 总连接逼近 3000，下一手降 overflow 60→40 或 maxReplicas 15→12
     - name: SQLALCHEMY_POOL_SIZE
-      value: "60"               # 每 worker 进程 60 个常驻连接
+      value: "40"               # 60→40：每进程常驻 40，进程数从 2→3 后基线保持不变
     - name: SQLALCHEMY_MAX_OVERFLOW
-      value: "30"               # 溢出 30 个（合计 90/worker，峰值 180/Pod）
+      value: "60"               # 突发溢出 60，单进程上限 100；溢出连接用完即关，不占常驻基线
     - name: SQLALCHEMY_POOL_RECYCLE
       value: "3600"             # 官方默认 1 小时，配合 PRE_PING 检测失效连接
     - name: SQLALCHEMY_POOL_PRE_PING
@@ -258,7 +263,7 @@ api:
     - name: GRAPH_ENGINE_MIN_WORKERS
       value: "3"  # 增加初始并行 worker 数
     - name: GRAPH_ENGINE_MAX_WORKERS
-      value: "5"  # 最大并行数
+      value: "3"  # 5→3：API 内同步工作流(/v1/workflows/run)的节点级并行扇出收敛，降低单进程连接需求
     - name: GRAPH_ENGINE_SCALE_UP_THRESHOLD
       value: "1"  # 降低扩容阈值，更快触发并行
     - name: UPLOAD_IMAGE_FILE_SIZE_LIMIT
@@ -350,6 +355,9 @@ worker:
       value: "rollback"
     - name: SQLALCHEMY_POOL_USE_LIFO
       value: "false"            # FIFO 模式
+    # 知识库检索线程池：同 API，显式封顶避免按宿主机核数过度开线程占连接
+    - name: RETRIEVAL_SERVICE_EXECUTORS
+      value: "4"
     # Celery Worker(1.13.x: 固定 CELERY_WORKER_AMOUNT,gevent 单进程模式)
     # 容量算账(200 万/日, 1:9 流式, 峰值 20 RPS, SSE 15s):
     #   - Little's Law: 同时在线 streaming task ≈ 20 × 15 = 300 个
@@ -867,11 +875,13 @@ affinity: {}
 #   - 注:api/worker 不会同时打满 HPA (流式:非流式 = 1:9, 两者负载反相关)
 #
 # 数据库连接数预算（RDS max_connections = 3200,green 完全克隆 blue 配置）:
-#   - API:          10 Pod × 2 worker × (60+30) = 1800 (HPA 峰值)
+#   - API:          15 Pod × 3 worker × 40 常驻 = 1800 (常驻基线; 单进程上限 40+60=100)
 #   - Worker:       10 Pod × (50+30)            = 800  (streaming 峰值,池共享)
 #   - PluginDaemon:  2 Pod × (20+10)            = 60
 #   - Beat:          1 Pod × (10+5)             = 15
-#   - 总计峰值:     ~2675 / 3200 (84%, 有 16% 余量;api/worker 不会同时打满 HPA)
+#   - 总计峰值:     ~2875 / 3200 (~90%; api/worker 不会同时打满 HPA, 1:9 流式比负载反相关)
+#   - 注: API 单进程并发已由 SERVER_WORKER_CONNECTIONS 50→12 收敛(缓解 gevent 队头阻塞), 单进程连接需求远低于池上限 100
+#         GRAPH_ENGINE_MAX_WORKERS 5→3 + RETRIEVAL_SERVICE_EXECUTORS 显式=4, 进一步压低单请求连接扇出
 #
 # Celery worker 并发模型(承接 streaming workflow):
 #   - gevent 单进程模式: 单 pod = 1 Python 进程 = 1 connection pool
