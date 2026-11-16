@@ -306,6 +306,22 @@ worker:
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+
+  # Liveness 探针：检测 Celery worker 是否还能响应（防止 Redis 连接僵死后进程不退、K8s 不重启）
+  # ⚠️ 注意：liveness 失败由 kubelet 直接 kill 容器，不受上面 maxUnavailable 约束；
+  #         failureThreshold=1 表示单次探测失败即重启，无缓冲窗口（Redis 抖动时可能两个 worker 同时被杀）。
+  #         为降低误杀，timeoutSeconds 给到 30s：命令冷启动慢不算失败，只有真正连不上 Celery 才算失败。
+  customLivenessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - celery -A celery_entrypoint.celery inspect ping -d "celery@${HOSTNAME}" --timeout=10 2>/dev/null | grep -q OK
+    initialDelaySeconds: 120   # worker 启动较慢，先等 2 分钟再开始探测
+    periodSeconds: 60          # 每 60 秒探一次
+    timeoutSeconds: 30         # 给足 celery 命令冷启动时间，避免"命令慢"被误判为失败
+    failureThreshold: 2        # 按需求：失败 2 次即重启
+    successThreshold: 1
   
   # 拓扑分散约束：均匀分布
   topologySpreadConstraints:
